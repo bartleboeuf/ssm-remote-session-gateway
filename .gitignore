@@ -1,0 +1,9 @@
+.vscode/
+certs/
+python/
+
+# C extensions
+*.so
+
+# Added by cargo build
+target/

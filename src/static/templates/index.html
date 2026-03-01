@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="SSM Remote Session Gateway - Manage AWS EC2 instances via Session Manager with SSH, RDP, and port forwarding capabilities">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="SSM Remote Session Gateway">
+    <meta property="og:description" content="Manage AWS EC2 instances via Session Manager">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary">
+    <meta property="twitter:title" content="SSM Remote Session Gateway">
+    <meta property="twitter:description" content="Manage AWS EC2 instances via Session Manager">
+
+    <title>SSM Remote Session Gateway</title>
+
+    <!-- Preload critical resources -->
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+        as="style">
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" as="style">
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" as="style">
+
+    <!-- Stylesheets -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="/static/images/logo.png">
+</head>
+
+<body>
+    <a href="#main-content" class="visually-hidden-focusable">Skip to main content</a>
+
+    <div class="container-fluid py-4">
+        <!-- Toolbar Navigation -->
+        <nav class="card shadow-sm mb-4" role="toolbar" aria-label="Main toolbar">
+            <div class="card-body">
+                <div class="d-flex flex-wrap align-items-center gap-3 toolbar-container">
+                    <!-- Logo -->
+                    <div class="d-flex align-items-center me-auto">
+                        <img src="/static/images/logo.png" alt="SSM Remote Session Gateway"
+                            style="max-height: 100px; width: auto;" class="me-2">
+                        <span class="fw-bold text-primary d-none d-md-inline">SSM Remote Session Gateway</span>
+                    </div>
+                    <!-- Profile Selection -->
+                    <div class="d-flex align-items-center gap-2">
+                        <label for="profileSelect" class="visually-hidden">AWS Profile</label>
+                        <select id="profileSelect" class="form-select toolbar-select" aria-label="Select AWS profile"
+                            aria-describedby="profileHelp">
+                            <option value="">Select Profile</option>
+                        </select>
+                        <button id="refreshProfilesBtn" class="btn btn-outline-secondary btn-sm"
+                            aria-label="Refresh profiles list" title="Refresh Profiles">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                        <span id="profileHelp" class="visually-hidden">Choose your AWS credentials profile</span>
+                    </div>
+
+                    <!-- Region Selection -->
+                    <div class="d-flex align-items-center gap-2">
+                        <label for="regionSelect" class="visually-hidden">AWS Region</label>
+                        <select id="regionSelect" class="form-select toolbar-select" aria-label="Select AWS region"
+                            aria-describedby="regionHelp">
+                            <option value="">Select Region</option>
+                        </select>
+                        <span id="regionHelp" class="visually-hidden">Choose your AWS region</span>
+                    </div>
+
+                    <!-- Connect Button -->
+                    <button id="connectBtn" class="btn btn-success d-flex align-items-center gap-2"
+                        aria-label="Connect to AWS" data-bs-toggle="tooltip" data-bs-placement="bottom"
+                        title="Connect to AWS (Ctrl+Enter)">
+                        <i class="bi bi-plug fs-5" aria-hidden="true"></i>
+                        <span>Connect</span>
+                    </button>
+
+                    <!-- Refresh Controls -->
+                    <div class="d-flex align-items-center gap-2" role="group" aria-label="Refresh controls">
+                        <button id="refreshBtn" class="btn btn-outline-secondary" aria-label="Refresh instances list"
+                            data-bs-toggle="tooltip" data-bs-placement="bottom" title="Refresh (F5)">
+                            <i class="bi bi-arrow-clockwise fs-5" aria-hidden="true"></i>
+                            <span class="visually-hidden">Refresh</span>
+                        </button>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="autoRefreshSwitch"
+                                aria-label="Enable auto refresh">
+                            <label class="form-check-label small text-muted ms-1" for="autoRefreshSwitch">
+                                Auto Refresh
+                            </label>
+                        </div>
+                        <span id="refreshTimer" class="badge bg-primary ms-1" aria-live="polite"
+                            aria-atomic="true"></span>
+                    </div>
+
+                    <!-- Settings Button -->
+                    <button id="preferencesBtn" class="btn btn-outline-secondary d-flex align-items-center gap-2"
+                        aria-label="Open preferences" data-bs-toggle="tooltip" data-bs-placement="bottom"
+                        title="Settings">
+                        <i class="bi bi-gear-fill fs-5" aria-hidden="true"></i>
+                        <span>Settings</span>
+                    </button>
+
+                    <!-- Quit Button -->
+                    <button id="quitBtn" class="btn btn-outline-danger d-flex align-items-center gap-2"
+                        aria-label="Quit application" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Quit">
+                        <i class="bi bi-power fs-5" aria-hidden="true"></i>
+                        <span>Quit</span>
+                    </button>
+
+                    <!-- About Button -->
+                    <button id="aboutBtn" class="btn btn-outline-secondary d-flex align-items-center gap-2"
+                        aria-label="About SSM Remote Session Gateway" data-bs-toggle="tooltip"
+                        data-bs-placement="bottom" title="About">
+                        <i class="bi bi-info-circle-fill fs-5" aria-hidden="true"></i>
+                        <span>About</span>
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Error Message Container -->
+        <div id="errorContainer" class="alert alert-danger d-none" role="alert" aria-live="assertive">
+            <i class="bi bi-exclamation-triangle-fill me-2" aria-hidden="true"></i>
+            <span id="errorMessage"></span>
+        </div>
+
+        <!-- Main Content -->
+        <main id="main-content">
+            <div class="row">
+                <!-- Instances Section -->
+                <section class="col-md-8" aria-labelledby="instancesHeading">
+                    <div class="card shadow-sm mb-4 mb-md-0">
+                        <div class="card-header border-bottom py-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div class="d-flex align-items-center gap-2">
+                                    <h5 class="m-0" id="instancesHeading">Instances</h5>
+                                    <div class="m-0 account-id-container d-flex align-items-center gap-2"
+                                        id="accountIdContainer" aria-live="polite">
+                                        <span class="badge bg-info text-white">
+                                            <i class="bi bi-building" aria-hidden="true"></i>
+                                            <span class="visually-hidden">AWS Account: </span>
+                                            <span id="awsAccountId"></span>
+                                        </span>
+                                    </div>
+                                </div>
+                                <span class="badge bg-primary" id="instanceCount" aria-live="polite"
+                                    aria-atomic="true">0 instances</span>
+                            </div>
+                            <!-- Filter Box -->
+                            <div class="filter-box mt-2 d-flex gap-2">
+                                <div class="flex-grow-1">
+                                    <label for="instanceFilter" class="visually-hidden">Filter instances by name</label>
+                                    <input type="text" id="instanceFilter" class="form-control"
+                                        placeholder="🔍 Filter by name (regex supported)"
+                                        aria-label="Filter instances by name" aria-describedby="filterHelp" />
+                                    <span id="filterHelp" class="visually-hidden">Enter a regular expression to filter
+                                        instances by name</span>
+                                </div>
+                                <div style="min-width: 150px;">
+                                    <label for="instanceStateFilter" class="visually-hidden">Filter instances by
+                                        state</label>
+                                    <select id="instanceStateFilter" class="form-select"
+                                        aria-label="Filter instances by state" title="Filter by instance state">
+                                        <option value="">All States</option>
+                                        <option value="running" selected>Running</option>
+                                        <option value="stopped">Stopped</option>
+                                        <option value="pending">Pending</option>
+                                        <option value="stopping">Stopping</option>
+                                        <option value="shutting-down">Shutting Down</option>
+                                        <option value="terminated">Terminated</option>
+                                    </select>
+                                </div>
+                                <div style="min-width: 150px;">
+                                    <label for="instanceOsFilter" class="visually-hidden">Filter instances by OS</label>
+                                    <select id="instanceOsFilter" class="form-select"
+                                        aria-label="Filter instances by OS" title="Filter by operating system">
+                                        <option value="">All OS</option>
+                                        <option value="Linux">Linux</option>
+                                        <option value="Windows">Windows</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="instancesEmptyState" class="text-center text-muted p-4 d-none" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-server d-block mb-3" aria-hidden="true"></i>
+                                <p class="mb-0">No instances found. Connect to AWS to view instances.</p>
+                            </div>
+                            <!-- Loading State -->
+                            <div id="instancesLoadingState" class="text-center p-4 d-none" role="status"
+                                aria-live="polite">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading instances...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Loading instances...</p>
+                            </div>
+                            <!-- Instances List -->
+                            <div id="instancesList" class="row g-4" role="list" aria-label="EC2 instances">
+                                <!-- Instances will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Active Connections Section -->
+                <aside class="col-md-4" aria-labelledby="connectionsHeading">
+                    <div class="card shadow-sm">
+                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
+                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
+                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
+                                active</span>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
+                                <p class="mt-2 mb-0">No active connections</p>
+                            </div>
+                            <!-- Connections List -->
+                            <div id="connectionsList" role="list" aria-label="Active connections">
+                                <!-- Active connections will be shown here -->
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <!-- Instance Details Modal -->
+    <div class="modal fade" id="instanceDetailsModal" tabindex="-1" aria-labelledby="instanceDetailsModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="instanceDetailsModalLabel">Instance Details</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="instanceDetailsContent" role="region" aria-label="Instance details">
+                        <!-- Content will be populated dynamically -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Port Forwarding Modal -->
+    <div class="modal fade" id="customPortModal" tabindex="-1" aria-labelledby="customPortModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="customPortModalLabel">Custom Port Forwarding</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="customPortForm" novalidate>
+                        <div class="mb-3">
+                            <label for="remotePort" class="form-label">Remote Port</label>
+                            <input type="number" class="form-control" id="remotePort" min="1" max="65535" value="80"
+                                required aria-describedby="remotePortHelp">
+                            <div id="remotePortHelp" class="form-text">Port number on the instance (1-65535)</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="localPort" class="form-label">Local Port <span
+                                    class="text-muted">(optional)</span></label>
+                            <input type="number" class="form-control" id="localPort" min="1" max="65535"
+                                aria-describedby="localPortHelp">
+                            <div id="localPortHelp" class="form-text">Local port to forward to (1-65535). If not
+                                specified, will use the same as remote port or a port from the configured range.</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="startPortForwardingBtn">
+                        <span class="spinner-border spinner-border-sm d-none me-2" role="status"
+                            aria-hidden="true"></span>
+                        Start Forwarding
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- About Modal -->
+    <div class="modal fade" id="aboutModal" tabindex="-1" aria-labelledby="aboutModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title d-flex align-items-center gap-2" id="aboutModalLabel">
+                        <i class="bi bi-cloud-arrow-up-fill me-1"></i>
+                        About SSM Remote Session Gateway
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="text-center mb-4">
+                        <div class="mb-3">
+                            <img src="/static/images/logo.png" alt="SSM Remote Session Gateway Logo"
+                                style="max-width: 300px; height: auto;" class="img-fluid">
+                        </div>
+                        <h4 class="mb-2">SSM Remote Session Gateway</h4>
+                        <p class="text-muted mb-3" id="appVersion">Version <span id="versionNumber">Loading...</span>
+                        </p>
+                        <p class="lead">
+                            Cross-platform application to manage EC2 instances and establish secure connections via AWS
+                            Systems Manager (SSM).
+                        </p>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <div class="mb-5">
+                        <h6 class="mb-4 text-primary fw-bold"><i class="bi bi-stars text-warning me-2"></i>Key Features
+                        </h6>
+                        <div class="instance-info-grid">
+                            <div class="info-item">
+                                <span class="info-label text-success"><i class="bi bi-terminal-fill me-1"></i>SSH</span>
+                                <span class="info-value">Secure shell access via SSM port forwarding.</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label text-primary"><i class="bi bi-display-fill me-1"></i>RDP</span>
+                                <span class="info-value">Remote desktop for Windows instances.</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label text-info"><i class="bi bi-arrow-left-right me-1"></i>Custom
+                                    Forwarding</span>
+                                <span class="info-value">Forward any port through SSM tunnels.</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label text-danger"><i
+                                        class="bi bi-shield-lock-fill me-1"></i>Secure</span>
+                                <span class="info-value">No open SSH ports, uses AWS IAM & SSM.</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label text-secondary"><i
+                                        class="bi bi-list-check me-1"></i>Management</span>
+                                <span class="info-value">View and filter EC2 instances efficiently.</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label text-dark"><i
+                                        class="bi bi-gear-fill me-1"></i>Configurable</span>
+                                <span class="info-value">Customizable port ranges & folder preferences.</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <hr class="my-4">
+
+                    <div class="mb-4">
+                        <h6 class="mb-3"><i class="bi bi-info-circle-fill text-info me-2"></i>About</h6>
+                        <p>
+                            SSM Remote Session Gateway is a cross-platform web application that simplifies managing EC2
+                            instances
+                            and establishing secure connections through AWS Systems Manager Session Manager. This
+                            project
+                            is maintained and continuously improved based on real-world usage and feedback.
+                        </p>
+                        <p class="mb-0">
+                            <strong>Maintainer:</strong> Bart LEBOEUF<br>
+                            Contributions, feedback, and improvement ideas are always welcome!
+                        </p>
+                    </div>
+
+                    <div class="mt-4 d-flex justify-content-center gap-4 flex-wrap">
+                        <a href="https://github.com/bartleboeuf/ssm-remote-session-gateway"
+                            class="btn btn-outline-dark d-flex flex-column align-items-center p-3"
+                            style="min-width: 140px;" target="_blank" rel="noopener noreferrer"
+                            aria-label="Visit GitHub repository (opens in new tab)">
+                            <i class="bi bi-github fs-3 mb-2"></i>
+                            <span>GitHub</span>
+                            <small class="text-muted">Repository</small>
+                        </a>
+                    </div>
+
+                    <div class="mt-4 text-center">
+                        <small class="text-muted">
+                            Built with <i class="bi bi-heart-fill text-danger"></i> using Rust AXUM, Bootstrap, and AWS
+                            SDK
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preferences Modal -->
+    <div class="modal fade" id="preferencesModal" tabindex="-1" aria-labelledby="preferencesModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="preferencesModalLabel">Preferences</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="preferencesForm" novalidate>
+                        <div class="mb-4 p-3 bg-light rounded-3 border-start border-4 border-primary">
+                            <h6 class="mb-3 text-primary fw-bold"><i class="bi bi-sliders me-2"></i>Session Settings
+                            </h6>
+                            <div class="row g-3 mb-3">
+                                <div class="col-6">
+                                    <label for="startPort" class="form-label small">Start Port</label>
+                                    <input type="number" class="form-control form-control-sm" id="startPort" min="1024"
+                                        max="65535" required>
+                                </div>
+                                <div class="col-6">
+                                    <label for="endPort" class="form-label small">End Port</label>
+                                    <input type="number" class="form-control form-control-sm" id="endPort" min="1024"
+                                        max="65535" required>
+                                </div>
+                            </div>
+                            <div class="row g-3">
+                                <div class="col-md-7">
+                                    <label for="logLevel" class="form-label small">Log Level</label>
+                                    <select class="form-select form-select-sm" id="logLevel" required>
+                                        <option value="DEBUG">Debug</option>
+                                        <option value="INFO">Info</option>
+                                        <option value="WARNING">Warning</option>
+                                        <option value="ERROR">Error</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-5">
+                                    <label for="cacheTtl" class="form-label small">Cache TTL (s)</label>
+                                    <input type="number" class="form-control form-control-sm" id="cacheTtl" min="60"
+                                        value="3600">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-4 p-3 bg-light rounded-3 border-start border-4 border-success">
+                            <h6 class="mb-3 text-success fw-bold"><i class="bi bi-terminal me-2"></i>Command Options
+                            </h6>
+                            <div class="mb-0">
+                                <label for="sshOptions" class="form-label small">Default SSH Options</label>
+                                <input type="text" class="form-control form-control-sm" id="sshOptions"
+                                    placeholder="-o StrictHostKeyChecking=no ...">
+                                <div class="form-text small mt-1">Options appended to all SSH commands.</div>
+                            </div>
+                        </div>
+                        <div class="mb-3 p-3 bg-light rounded-3 border-start border-4 border-info">
+                            <h6 class="mb-3 text-info fw-bold"><i class="bi bi-key me-2"></i>SSH Key Discovery</h6>
+                            <div id="sshKeyFoldersContainer" class="mb-2">
+                                <!-- Folder inputs will be dynamically added here -->
+                            </div>
+                            <div class="d-flex gap-2 mb-2">
+                                <button type="button" class="btn btn-sm btn-outline-info flex-grow-1"
+                                    id="addSshKeyFolderBtn">
+                                    <i class="bi bi-plus-circle me-1"></i> Add Folder
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-secondary"
+                                    id="browseSshKeyFolderBtn" title="Browse for folder">
+                                    <i class="bi bi-folder"></i>
+                                </button>
+                            </div>
+                            <input type="file" id="sshKeyFolderFileInput" style="display: none;" webkitdirectory
+                                directory multiple>
+                            <div class="form-text small">Paths where SSH keys are stored. They will be searched to
+                                decrypt Windows passwords.</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="savePreferencesBtn">
+                        <span class="spinner-border spinner-border-sm d-none me-2" role="status"
+                            aria-hidden="true"></span>
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quit Confirmation Modal -->
+    <div class="modal fade" id="quitModal" tabindex="-1" aria-labelledby="quitModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title d-flex align-items-center gap-2" id="quitModalLabel">
+                        <i class="bi bi-power me-1"></i>
+                        Quit Application
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-4 text-center">
+                        <div class="icon-container-large bg-danger bg-opacity-10 mb-3 mx-auto">
+                            <i class="bi bi-exclamation-triangle text-danger fs-3"></i>
+                        </div>
+                        <h6 class="text-danger fw-bold">Are you sure you want to quit?</h6>
+                        <p class="text-muted small">You are about to terminate the current session gateway.</p>
+                    </div>
+
+                    <div class="p-3 bg-light rounded-3 border-start border-4 border-danger">
+                        <h6 class="mb-2 text-danger small fw-bold">Session Implications:</h6>
+                        <ul class="mb-0 small text-muted ps-3">
+                            <li class="mb-1">All active SSH/RDP connections will be <strong>terminated
+                                    immediately</strong>.</li>
+                            <li>The backend application will stop all running processes.</li>
+                            <li>This browser tab will be closed automatically.</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Keep Working</button>
+                    <button type="button" class="btn btn-danger" id="confirmQuitBtn">
+                        <i class="bi bi-power me-1"></i> Quit Now
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3" aria-live="polite" aria-atomic="true">
+        <!-- Toasts will be added here -->
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay"
+        class="d-none position-fixed top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-flex justify-content-center align-items-center loading-overlay"
+        role="status" aria-live="polite" aria-label="Loading">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" defer></script>
+    <script src="/static/js/app.js" defer></script>
+</body>
+
+</html>

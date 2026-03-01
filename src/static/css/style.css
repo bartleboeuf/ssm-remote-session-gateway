@@ -1,0 +1,950 @@
+/* ============================================
+   WARM & FRIENDLY UI ENHANCEMENTS
+   ============================================ */
+
+/* 1. COLOR SCHEME - CSS Custom Properties */
+:root {
+    /* Primary Colors - Warm Teal/Cyan */
+    --color-primary: #20c997;
+    --color-primary-dark: #17a2b8;
+    --color-primary-light: #3dd5b3;
+
+    /* Background Colors */
+    --color-bg-primary: #fafbfc;
+    --color-bg-card: #ffffff;
+    --color-bg-hover: #f8f9fa;
+
+    /* Accent Colors */
+    --color-accent-orange: #ff8c42;
+    --color-accent-purple: #9d7ce8;
+
+    /* Status Colors - Warmer Variants */
+    --color-success: #10b981;
+    --color-success-light: #34d399;
+    --color-warning: #f59e0b;
+    --color-warning-light: #fbbf24;
+    --color-danger: #ef4444;
+    --color-danger-light: #f87171;
+    --color-info: #3b82f6;
+    --color-info-light: #60a5fa;
+
+    /* Text Colors */
+    --color-text-primary: #1f2937;
+    --color-text-secondary: #6b7280;
+    --color-text-muted: #9ca3af;
+
+    /* Border Colors */
+    --color-border: #e5e7eb;
+    --color-border-warm: #f3f4f6;
+
+    /* Shadow Colors - Warmer, Softer */
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12);
+    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
+    --shadow-warm: 0 4px 16px rgba(32, 201, 151, 0.15);
+
+    /* Border Radius */
+    --radius-sm: 6px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-pill: 9999px;
+
+    /* Transitions */
+    --transition-fast: 150ms ease;
+    --transition-base: 300ms ease;
+    --transition-slow: 500ms ease;
+
+    /* Glassmorphism Effect */
+    --glass-bg: rgba(255, 255, 255, 0.65);
+    --glass-border: rgba(255, 255, 255, 0.3);
+    --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+    --glass-blur: 12px;
+
+    /* Spacing */
+    --spacing-xs: 0.25rem;
+    --spacing-sm: 0.5rem;
+    --spacing-md: 0.75rem;
+    --spacing-lg: 1rem;
+    --spacing-xl: 1.25rem;
+}
+
+/* 2. TYPOGRAPHY - Google Fonts Import */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    /* Gradient background for better glass effect */
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background-attachment: fixed;
+    color: var(--color-text-primary);
+    line-height: 1.6;
+    letter-spacing: 0.01em;
+    min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+}
+
+h5 {
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.text-muted {
+    color: var(--color-text-secondary) !important;
+}
+
+/* 3. SPACING - Compact Padding, Margins, Gaps */
+.container-fluid {
+    padding: var(--spacing-md) var(--spacing-md);
+}
+
+.card {
+    padding: 0;
+    margin-bottom: var(--spacing-md);
+}
+
+.card-body {
+    padding: var(--spacing-md) var(--spacing-lg) !important;
+}
+
+.card-header {
+    padding: var(--spacing-md) var(--spacing-lg) !important;
+}
+
+.row.g-4 {
+    gap: var(--spacing-md) !important;
+}
+
+.toolbar-container {
+    gap: var(--spacing-sm) !important;
+    row-gap: var(--spacing-sm) !important;
+}
+
+/* 4. CARDS - Redesign with Rounded Corners & Softer Shadows */
+.card {
+    border-radius: var(--radius-lg);
+    background: var(--glass-bg);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    transition: all var(--transition-base);
+}
+
+.card:hover {
+    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.2);
+    transform: translateY(-2px);
+    border-color: rgba(255, 255, 255, 0.5);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0.65) 100%);
+}
+
+.instance-card {
+    border-radius: var(--radius-lg);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.7) 0%, rgba(255, 255, 255, 0.45) 100%);
+    backdrop-filter: blur(var(--glass-blur));
+    -webkit-backdrop-filter: blur(var(--glass-blur));
+    border: 0.5px solid rgba(255, 255, 255, 0.4);
+    box-shadow: var(--glass-shadow);
+    transition: all var(--transition-base);
+    cursor: default;
+    overflow: hidden;
+}
+
+.instance-card:hover {
+    box-shadow: 0 12px 40px 0 rgba(31, 38, 135, 0.2);
+    border-color: rgba(32, 201, 151, 0.5);
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0.55) 100%);
+}
+
+.instance-card .card-header {
+    background: transparent !important;
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+    padding: 0.75rem 1.25rem !important;
+}
+
+.instance-card .card-footer {
+    background: rgba(0, 0, 0, 0.02);
+    border-top: 0.5px solid rgba(0, 0, 0, 0.05);
+    padding: 0.75rem 1.25rem;
+}
+
+.instance-card.non-ssm {
+    opacity: 0.7;
+}
+
+.connection-item {
+    padding: var(--spacing-md);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-card);
+    margin-bottom: var(--spacing-sm);
+    border: 1px solid var(--color-border-warm);
+    box-shadow: var(--shadow-sm);
+    transition: all var(--transition-base);
+}
+
+.connection-item:hover {
+    background: var(--color-bg-hover);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+/* 5. BUTTONS - Enhanced with Better Hover Effects */
+.btn {
+    border-radius: var(--radius-md);
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    transition: all var(--transition-base);
+    border: none;
+    font-size: 0.9rem;
+    min-height: 36px;
+}
+
+.btn:hover {
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: var(--shadow-md);
+}
+
+.btn:active {
+    transform: scale(0.98);
+}
+
+.btn-success {
+    background-color: var(--color-success);
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: var(--color-success-light);
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.3);
+}
+
+.btn-danger {
+    background-color: var(--color-danger);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: var(--color-danger-light);
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+.btn-primary {
+    background-color: var(--color-primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background-color: var(--color-primary-light);
+    box-shadow: var(--shadow-warm);
+}
+
+.btn-outline-secondary {
+    border-color: var(--color-border);
+    color: var(--color-text-secondary);
+}
+
+.btn-outline-secondary:hover {
+    background-color: var(--color-bg-hover);
+    border-color: var(--color-text-secondary);
+    color: var(--color-text-primary);
+}
+
+.btn-outline-danger {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+}
+
+.btn-outline-danger:hover {
+    background-color: var(--color-danger);
+    color: white;
+    box-shadow: 0 4px 16px rgba(239, 68, 68, 0.3);
+}
+
+.btn-sm {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8rem;
+    min-height: 32px;
+}
+
+.btn-dark {
+    background-color: var(--color-text-primary);
+    color: white;
+}
+
+.btn-dark:hover {
+    background-color: #374151;
+    box-shadow: var(--shadow-md);
+}
+
+/* Custom Button Colors */
+.btn-purple {
+    background-color: var(--color-accent-purple);
+    border-color: var(--color-accent-purple);
+    color: #fff;
+}
+
+.btn-purple:hover {
+    background-color: #8b6dd6;
+    border-color: #8b6dd6;
+    box-shadow: 0 4px 16px rgba(157, 124, 232, 0.3);
+}
+
+.btn-ottanio {
+    background-color: var(--color-primary-dark);
+    border-color: var(--color-primary-dark);
+    color: #fff;
+}
+
+.btn-ottanio:hover {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow-warm);
+}
+
+/* Button Loading State */
+.btn .spinner-border-sm {
+    width: 1rem;
+    height: 1rem;
+    border-width: 0.15em;
+    border-color: currentColor;
+    border-right-color: transparent;
+}
+
+/* 6. ANIMATIONS - Smooth Transitions */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.7;
+    }
+}
+
+@keyframes bounce {
+
+    0%,
+    20%,
+    50%,
+    80%,
+    100% {
+        transform: translateY(0);
+    }
+
+    40% {
+        transform: translateY(-10px);
+    }
+
+    60% {
+        transform: translateY(-5px);
+    }
+}
+
+@keyframes scaleIn {
+    from {
+        transform: scale(0.95);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Page Load Animation */
+body {
+    animation: fadeIn 0.5s ease-out;
+}
+
+/* 7. ICONS - Better Presentation */
+.bi {
+    transition: all var(--transition-base);
+}
+
+.btn .bi {
+    font-size: 1em;
+}
+
+.btn-sm .bi {
+    font-size: 0.9em;
+}
+
+/* Icon Containers */
+.icon-container {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: var(--radius-pill);
+    background: var(--color-primary-light);
+    color: white;
+    margin-bottom: var(--spacing-xs);
+}
+
+.icon-container-large {
+    width: 3rem;
+    height: 3rem;
+    font-size: 1.5rem;
+}
+
+/* Status Indicator Pulse */
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--color-success);
+    animation: pulse 2s infinite;
+    margin-right: var(--spacing-xs);
+}
+
+/* 8. FORMS - Enhanced Inputs with Warm Focus States */
+.form-control,
+.form-select {
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--color-border);
+    padding: 0.5rem 0.75rem;
+    transition: all var(--transition-base);
+    font-size: 0.875rem;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 3px rgba(32, 201, 151, 0.1);
+    outline: none;
+}
+
+.form-control:hover,
+.form-select:hover {
+    border-color: var(--color-primary-light);
+}
+
+.form-label {
+    font-weight: 500;
+    color: var(--color-text-primary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.form-check-input {
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: var(--radius-sm);
+    border: 2px solid var(--color-border);
+    transition: all var(--transition-base);
+}
+
+.form-check-input:checked {
+    background-color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.form-check-input:focus {
+    box-shadow: 0 0 0 3px rgba(32, 201, 151, 0.1);
+}
+
+#instanceFilter::placeholder {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+/* 9. MODALS - Better Animations & Warm Styling */
+.modal-content {
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.8) !important;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-lg);
+    animation: scaleIn 0.3s ease-out;
+}
+
+.modal-header {
+    background: linear-gradient(135deg, rgba(61, 213, 179, 0.8) 0%, rgba(32, 201, 151, 0.8) 100%);
+    color: white;
+    border-bottom: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.modal-header .modal-title {
+    font-weight: 600;
+    color: white;
+}
+
+.modal-header .btn-close {
+    filter: brightness(0) invert(1);
+    opacity: 0.9;
+}
+
+.modal-header .btn-close:hover {
+    opacity: 1;
+}
+
+.modal-body {
+    padding: var(--spacing-lg);
+}
+
+.modal-footer {
+    background-color: rgba(248, 249, 250, 0.5);
+    border-top: 1px solid var(--glass-border);
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+.modal.show {
+    animation: fadeIn 0.3s ease-out;
+}
+
+.modal-loading {
+    opacity: 0.5 !important;
+    pointer-events: none;
+}
+
+/* 10. BADGES - Warmer Colors & Better Styling */
+.badge {
+    border-radius: var(--radius-pill);
+    padding: 0.25rem 0.5rem;
+    font-weight: 500;
+    font-size: 0.75rem;
+    letter-spacing: 0.01em;
+    transition: all var(--transition-base);
+}
+
+.status-badge {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-pill);
+}
+
+.bg-success {
+    background-color: var(--color-success) !important;
+}
+
+.bg-warning {
+    background-color: var(--color-warning) !important;
+}
+
+.bg-danger {
+    background-color: var(--color-danger) !important;
+}
+
+.bg-info {
+    background-color: var(--color-info) !important;
+}
+
+.bg-primary {
+    background-color: var(--color-primary) !important;
+}
+
+.bg-secondary {
+    background-color: var(--color-text-secondary) !important;
+}
+
+.badge-fucsia {
+    background-color: var(--color-accent-purple) !important;
+    color: #fff;
+}
+
+/* Status Badge Pulse Animation */
+.badge.bg-success:has-text("running") {
+    animation: pulse 2s infinite;
+}
+
+/* 11. EMPTY STATES - Compact Icons & Friendly Design */
+#instancesEmptyState,
+#connectionsEmptyState {
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: var(--spacing-lg);
+    text-align: center;
+}
+
+#instancesEmptyState .bi,
+#connectionsEmptyState .bi {
+    font-size: 2.5rem;
+    color: var(--color-primary-light);
+    margin-bottom: var(--spacing-md);
+    opacity: 0.7;
+    animation: pulse 3s infinite;
+}
+
+#instancesEmptyState p,
+#connectionsEmptyState p {
+    font-size: 0.95rem;
+    color: var(--color-text-secondary);
+    margin: 0;
+}
+
+/* 12. LOADING - Better Animations & Warm Colors */
+.loading-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(250, 251, 252, 0.9);
+    backdrop-filter: blur(4px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+    animation: fadeIn 0.2s ease-out;
+}
+
+#loadingOverlay {
+    transition: opacity var(--transition-base);
+    z-index: 1060;
+}
+
+.spinner-border {
+    width: 2rem;
+    height: 2rem;
+    border-width: 0.25em;
+    border-color: var(--color-primary);
+    border-right-color: transparent;
+    animation: spinner-border 0.75s linear infinite;
+}
+
+@keyframes spinner-border {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+#instancesLoadingState {
+    min-height: 200px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: var(--spacing-lg);
+}
+
+#instancesLoadingState .spinner-border {
+    margin-bottom: var(--spacing-sm);
+    width: 2rem;
+    height: 2rem;
+}
+
+#instancesLoadingState p {
+    color: var(--color-text-secondary);
+    font-size: 0.9rem;
+}
+
+/* 13. TOASTS - Smooth Animations & Warm Styling */
+.toast {
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    border: none;
+    animation: slideInRight 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+    opacity: 0.98;
+    backdrop-filter: blur(10px);
+}
+
+.toast.show {
+    animation: slideInRight 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+.toast-body {
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+.toast.bg-success {
+    background-color: var(--color-success) !important;
+}
+
+.toast.bg-danger {
+    background-color: var(--color-danger) !important;
+}
+
+.toast.bg-warning {
+    background-color: var(--color-warning) !important;
+}
+
+.toast.bg-info {
+    background-color: var(--color-info) !important;
+}
+
+.toast .btn-close {
+    filter: brightness(0) invert(1);
+    opacity: 0.8;
+}
+
+.toast .btn-close:hover {
+    opacity: 1;
+}
+
+/* 14. RESPONSIVE - Mobile Refinements */
+@media (max-width: 768px) {
+    :root {
+        --spacing-xl: 1.5rem;
+        --spacing-lg: 1.25rem;
+    }
+
+    .container-fluid {
+        padding: var(--spacing-md);
+    }
+
+    .card {
+        padding: var(--spacing-md);
+        margin-bottom: var(--spacing-md);
+    }
+
+    .card-body {
+        padding: var(--spacing-md) !important;
+    }
+
+    .card-header {
+        padding: var(--spacing-md) !important;
+    }
+
+    .toolbar-container {
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--spacing-sm) !important;
+    }
+
+    .toolbar-container .form-select,
+    .toolbar-container .form-control,
+    .toolbar-container .btn {
+        width: 100%;
+        min-height: 38px;
+        font-size: 0.875rem;
+    }
+
+    .toolbar-container .filter-box {
+        width: 100%;
+        max-width: 100%;
+    }
+
+    .toolbar-select {
+        width: 100%;
+    }
+
+    .btn {
+        min-height: 38px;
+        padding: 0.5rem 1rem;
+        font-size: 0.875rem;
+    }
+
+    .btn-sm {
+        min-height: 32px;
+        padding: 0.375rem 0.75rem;
+        font-size: 0.8rem;
+    }
+
+    .instance-card:hover {
+        transform: none;
+        /* Disable hover transform on mobile */
+    }
+
+    .modal-body {
+        padding: var(--spacing-md);
+    }
+
+    .modal-header,
+    .modal-footer {
+        padding: var(--spacing-sm) var(--spacing-md);
+    }
+
+    h5 {
+        font-size: 1rem;
+    }
+
+    #instancesEmptyState .bi,
+    #connectionsEmptyState .bi {
+        font-size: 2rem;
+    }
+}
+
+@media (max-width: 576px) {
+    .card {
+        border-radius: var(--radius-md);
+    }
+
+    .modal-content {
+        border-radius: var(--radius-md);
+    }
+
+    .btn {
+        font-size: 0.9rem;
+        padding: 0.625rem 1.25rem;
+    }
+}
+
+/* Additional Utility Classes */
+.cursor-pointer {
+    cursor: pointer;
+}
+
+.text-small {
+    font-size: 0.875rem;
+}
+
+/* Dashboard specific styles */
+.instance-info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 1rem;
+    align-items: center;
+}
+
+.info-item {
+    display: flex;
+    flex-direction: column;
+}
+
+.info-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--color-text-muted);
+    margin-bottom: 0.2rem;
+    font-weight: 600;
+}
+
+.info-value {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--color-text-primary);
+}
+
+.status-glow {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+.status-glow-running {
+    background-color: var(--color-success);
+    box-shadow: 0 0 10px var(--color-success);
+}
+
+.status-glow-stopped {
+    background-color: var(--color-danger);
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+}
+
+/* Custom Scrollbar - Warmer Styling */
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--color-bg-hover);
+    border-radius: var(--radius-sm);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--color-text-muted);
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-base);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
+}
+
+/* Filter Bar */
+.filter-bar {
+    margin-bottom: var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+}
+
+/* Error Container */
+#errorContainer {
+    margin-bottom: var(--spacing-md);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-danger-light);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Account ID Container */
+.account-id-container {
+    display: none;
+}
+
+/* Enable text selection */
+* {
+    -webkit-user-select: text;
+    -moz-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+}
+
+/* Modal Content Styles */
+.modal-body h6 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.modal-body .bg-light {
+    background: rgba(0, 0, 0, 0.03) !important;
+    border: 1px solid rgba(0, 0, 0, 0.05) !important;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.02);
+}
+
+.modal-body .copy-value:hover {
+    color: var(--color-primary);
+    text-decoration: underline;
+}
+
+/* Fix for nested grid in modals */
+.modal-body .instance-info-grid {
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}

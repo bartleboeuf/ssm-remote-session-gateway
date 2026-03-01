@@ -1,0 +1,91 @@
+[package]
+name = "ssm-remote-session-gateway"
+version = "1.0.0"
+edition = "2024"
+description = "Secure EC2 instance management and connection gateway via AWS SSM"
+authors = ["Bart LEBOEUF"]
+readme = "README.md"
+homepage = "https://github.com/bartleboeuf/ssm-remote-session-gateway"
+repository = "https://github.com/bartleboeuf/ssm-remote-session-gateway"
+rust-version = "1.93.0"  # Specify minimum Rust version
+categories = ["development-tools", "command-line-utilities"]
+keywords = ["axum", "aws", "aws-sdk-ssm"]
+
+[dependencies]
+axum = { version = "0.8.8", features = ["macros", "json", "http1", "http2"] }
+aws-config = { version = "1.8.14", features = ["behavior-version-latest"] }
+aws-credential-types = "1.2.12"
+aws-sdk-ec2 = "1.215.0"
+aws-sdk-iam = "1.104.0"
+aws-sdk-sts = "1.98.0"
+aws-sdk-ssm = "1.104.0"
+aws-types = "1.3.12"
+dirs = "6.0.0"
+anyhow = "1.0.102"
+directories = "6.0.0"
+hyper = { version = "1.8.1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "0.1.20", features = ["tokio", "server", "http1", "http2"] }
+rustls = "0.23.32"
+rustls-pki-types = "1.14.0"
+tokio-rustls = "0.26.4"
+rcgen = "0.14.7"
+time = { version = "0.3.36", features = ["std"] }
+webbrowser = "1.1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.49.0", features = ["full"] }
+tower = { version = "0.5.3", features = ["limit", "timeout"] }
+tower-http = { version = "0.6.8", features = ["cors", "fs", "trace", "limit", "set-header", "compression-br", "compression-gzip"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.4"
+uuid = { version = "1.21.0", features = ["v4", "serde"] }
+which = "8.0.0"
+base64 = "0.22.1"
+rsa = { version = "0.9.10", features = ["pem"] }
+static-serve = "0.5.0"
+
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
+
+# Optimize dependencies for release builds
+[profile.release.package."*"]
+opt-level = 3
+debug = false
+
+# Development profile optimizations
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+incremental = true
+
+# selectively optimize only the heaviest crates:
+[profile.dev.package.aws-sdk-ec2]
+opt-level = 2
+[profile.dev.package.aws-sdk-ssm]
+opt-level = 2
+
+# Speed up dev builds by reducing optimization on deps
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+
+# Used only on Windows to build the vcpkg dependencies
+[package.metadata.vcpkg]
+git = "https://github.com/microsoft/vcpkg"
+# The revision of the vcpkg repository to use
+# https://github.com/microsoft/vcpkg/tags
+rev = "2025.12.12"
+
+[package.metadata.vcpkg.target]
+x86_64-pc-windows-msvc = { triplet = "x64-windows-static-md", dev-dependencies = ["openssl"] }
+
+[[bin]]
+name = "ssm-remote-session-gateway"
+path = "src/main.rs"
