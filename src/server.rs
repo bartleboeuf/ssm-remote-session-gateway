@@ -8,7 +8,10 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-use rustls::{ServerConfig, pki_types::CertificateDer, pki_types::PrivateKeyDer, pki_types::pem::PemObject};
+use rustls::{
+    ServerConfig, pki_types::CertificateDer, pki_types::PrivateKeyDer, pki_types::pem::PemObject,
+};
+use static_serve::{embed_asset, embed_assets};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio_rustls::TlsAcceptor;
@@ -18,7 +21,6 @@ use tower_http::{
     set_header::SetResponseHeaderLayer, trace::TraceLayer,
 };
 use tracing::{info, warn};
-use static_serve::{embed_asset, embed_assets};
 
 use crate::handlers::{aws, connections, prefs};
 use crate::models::Preferences;
@@ -50,7 +52,7 @@ async fn cleanup_connections(state: &AppState) {
 /// Args:
 ///   initial_prefs: The initial preferences to load into the application state. This allows the server to start with a predefined configuration, which can be useful for testing or for providing default settings on first run. The preferences are stored in a shared, thread-safe manner using an Arc and RwLock, allowing them to be accessed and modified by the various handlers that need to read or update the preferences during the server's operation.
 /// Returns:
-///   Ok(()) if the server runs successfully and shuts down gracefully when a shutdown signal is received. If there is an error during server startup (e.g. issues with TLS configuration, binding  to the address) or during runtime (e.g. unhandled errors in request processing), it returns an Err with details about the failure. The error message will include information about what went wrong to help diagnose issues with server setup or operation. 
+///   Ok(()) if the server runs successfully and shuts down gracefully when a shutdown signal is received. If there is an error during server startup (e.g. issues with TLS configuration, binding  to the address) or during runtime (e.g. unhandled errors in request processing), it returns an Err with details about the failure. The error message will include information about what went wrong to help diagnose issues with server setup or operation.
 /// Raises:
 ///   IOError: If there is an error reading the TLS certificate or key files from disk, or if there is an error binding to the specified address for the server to listen on.
 ///   TLSConfiguration Error: If there is an error generating a self-signed certificate or configuring the TLS settings for the server.
@@ -61,8 +63,11 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         prefs: Arc::new(tokio::sync::RwLock::new(initial_prefs)),
         connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         instance_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        instance_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         shutdown_tx: shutdown_tx.clone(),
     };
+
+    aws::load_instance_cache_from_disk(&state).await;
 
     // Startup checks for required external tools
     if which::which("session-manager-plugin").is_ok() {
@@ -114,10 +119,7 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
             "/windows-password/{instance_id}",
             post(aws::windows_password),
         )
-        .route(
-            "/rdp-client/connect",
-            post(connections::rdp_client_connect),
-        )
+        .route("/rdp-client/connect", post(connections::rdp_client_connect))
         .route("/health", get(aws::health))
         .route("/version", get(aws::version))
         .route("/quit", post(connections::quit));

@@ -5,23 +5,23 @@ use axum::{
     response::IntoResponse,
 };
 use std::collections::HashMap;
+use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
-use std::time::Duration;
 use std::process::Command;
-use std::fs;
+use std::time::Duration;
 
+use crate::models::{ConnectionInfo, ManagedConnection, RdpClientReq, StartPortReq, err, ok};
+use crate::state::AppState;
 use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ec2 as ec2;
 use aws_sdk_ssm as ssm;
 use aws_types::region::Region;
-use crate::models::{ConnectionInfo, ManagedConnection, RdpClientReq, StartPortReq, err, ok};
-use crate::state::AppState;
 use dirs;
-use tracing::{warn, info, error};
-use tokio::time;
-use tokio::process::Command as TokioCommand;
 use tokio::io::AsyncReadExt;
+use tokio::process::Command as TokioCommand;
+use tokio::time;
+use tracing::{error, info, warn};
 use which::which;
 
 /// Finds a free local port within the specified range by attempting to bind to each port until it finds one that is available.
@@ -81,47 +81,40 @@ async fn start_ssm_port_forward(
     let ssm_client = ssm::Client::new(&cfg);
 
     // --- Step 2: Determine document name and parameters based on remote_host ---
-    let (document_name, parameters, session_manager_params_json) = if let Some(ref remote_host) =
-        info.remote_host
-    {
-        // Port forwarding to a remote host (e.g. RDS endpoint)
-        let doc = "AWS-StartPortForwardingSessionToRemoteHost";
-        let mut params: HashMap<String, Vec<String>> = HashMap::new();
-        params.insert("host".into(), vec![remote_host.clone()]);
-        params.insert("portNumber".into(), vec![info.remote_port.to_string()]);
-        params.insert(
-            "localPortNumber".into(),
-            vec![info.local_port.to_string()],
-        );
-        let sm_params = serde_json::json!({
-            "Target": info.instance_id,
-            "DocumentName": doc,
-            "parameters": {
-                "host": [remote_host],
-                "portNumber": [info.remote_port.to_string()],
-                "localPortNumber": [info.local_port.to_string()]
-            }
-        });
-        (doc, params, sm_params)
-    } else {
-        // Standard port forwarding through the instance
-        let doc = "AWS-StartPortForwardingSession";
-        let mut params: HashMap<String, Vec<String>> = HashMap::new();
-        params.insert("portNumber".into(), vec![info.remote_port.to_string()]);
-        params.insert(
-            "localPortNumber".into(),
-            vec![info.local_port.to_string()],
-        );
-        let sm_params = serde_json::json!({
-            "Target": info.instance_id,
-            "DocumentName": doc,
-            "parameters": {
-                "portNumber": [info.remote_port.to_string()],
-                "localPortNumber": [info.local_port.to_string()]
-            }
-        });
-        (doc, params, sm_params)
-    };
+    let (document_name, parameters, session_manager_params_json) =
+        if let Some(ref remote_host) = info.remote_host {
+            // Port forwarding to a remote host (e.g. RDS endpoint)
+            let doc = "AWS-StartPortForwardingSessionToRemoteHost";
+            let mut params: HashMap<String, Vec<String>> = HashMap::new();
+            params.insert("host".into(), vec![remote_host.clone()]);
+            params.insert("portNumber".into(), vec![info.remote_port.to_string()]);
+            params.insert("localPortNumber".into(), vec![info.local_port.to_string()]);
+            let sm_params = serde_json::json!({
+                "Target": info.instance_id,
+                "DocumentName": doc,
+                "parameters": {
+                    "host": [remote_host],
+                    "portNumber": [info.remote_port.to_string()],
+                    "localPortNumber": [info.local_port.to_string()]
+                }
+            });
+            (doc, params, sm_params)
+        } else {
+            // Standard port forwarding through the instance
+            let doc = "AWS-StartPortForwardingSession";
+            let mut params: HashMap<String, Vec<String>> = HashMap::new();
+            params.insert("portNumber".into(), vec![info.remote_port.to_string()]);
+            params.insert("localPortNumber".into(), vec![info.local_port.to_string()]);
+            let sm_params = serde_json::json!({
+                "Target": info.instance_id,
+                "DocumentName": doc,
+                "parameters": {
+                    "portNumber": [info.remote_port.to_string()],
+                    "localPortNumber": [info.local_port.to_string()]
+                }
+            });
+            (doc, params, sm_params)
+        };
 
     // --- Step 3: Call SSM StartSession API ---
     tracing::info!(
@@ -225,10 +218,7 @@ async fn start_ssm_port_forward(
     // Brief check for immediate failure
     time::sleep(Duration::from_millis(500)).await;
     if let Ok(Some(status)) = child.try_wait() {
-        tracing::error!(
-            "session-manager-plugin exited early (status {})",
-            status,
-        );
+        tracing::error!("session-manager-plugin exited early (status {})", status,);
         return Err(err(
             StatusCode::BAD_REQUEST,
             format!(
@@ -242,34 +232,52 @@ async fn start_ssm_port_forward(
 }
 
 /// Build rich connection info used by the frontend for user instructions.
-fn build_connection_info(
-    instance_id: &str,
+/// Constructs the JSON payload describing how the frontend should use the forwarded port.
+/// Represents the data needed to describe a forwarded port session to the frontend.
+struct ConnectionInfoArgs<'a> {
+    instance_id: &'a str,
     remote_port: u16,
     local_port: u16,
-    remote_host: Option<&str>,
-    ssh_options: &str,
-    key_name: Option<&str>,
-    key_path: Option<&str>,
-) -> serde_json::Value {
+    remote_host: Option<&'a str>,
+    ssh_options: &'a str,
+    key_name: Option<&'a str>,
+    key_path: Option<&'a str>,
+    linux_username: &'a str,
+    windows_username: &'a str,
+}
+
+/// Formats a user instruction payload describing the local and remote endpoints.
+fn build_connection_info(args: ConnectionInfoArgs) -> serde_json::Value {
+    let ConnectionInfoArgs {
+        instance_id,
+        remote_port,
+        local_port,
+        remote_host,
+        ssh_options,
+        key_name,
+        key_path,
+        linux_username,
+        windows_username,
+    } = args;
     let ip = "127.0.0.1";
     match (remote_port, remote_host) {
         (22, _) => {
-            let command = format!("ssh {ssh_options} -p {local_port} ec2-user@{ip}");
+            let command = format!("ssh {ssh_options} -p {local_port} {linux_username}@{ip}");
             let mut command_with_key = command.clone();
             if let Some(path) = key_path {
                 let quoted = format!("\"{}\"", path);
                 command_with_key =
-                    format!("ssh {ssh_options} -i {quoted} -p {local_port} ec2-user@{ip}");
+                    format!("ssh {ssh_options} -i {quoted} -p {local_port} {linux_username}@{ip}");
             }
             serde_json::json!({
                 "type": "ssh",
                 "instruction": format!("Connect via SSH to {ip}:{local_port}"),
                 "command": command,
                 "ssh_command_with_key": command_with_key,
-                "note": "Replace 'ec2-user' with the appropriate username (ubuntu, admin, etc.)",
+                "note": format!("Replace '{linux_username}' with the appropriate username (ubuntu, admin, etc.) if needed"),
                 "ip": ip,
                 "port": local_port.to_string(),
-                "user": "ec2-user",
+                "user": linux_username,
                 "key_name": key_name,
                 "key_path": key_path,
             })
@@ -282,7 +290,7 @@ fn build_connection_info(
             "note": "Use your RDP client (mstsc, Microsoft Remote Desktop, etc.) to connect",
             "ip": ip,
             "port": local_port.to_string(),
-            "user": "Administrator",
+            "user": windows_username,
             "key_name": key_name
         }),
         (_, Some(host)) => serde_json::json!({
@@ -305,6 +313,7 @@ fn build_connection_info(
     }
 }
 
+/// Retrieves the key pair name attached to the given EC2 instance via DescribeInstances.
 async fn lookup_instance_key_name(
     prefs: &crate::models::Preferences,
     instance_id: &str,
@@ -345,10 +354,11 @@ async fn lookup_instance_key_name(
     }
 }
 
+/// Searches configured folders (including ~/.ssh) for a PEM/key file matching the key name.
 fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
     let mut dirs = Vec::new();
     if let Some(f) = folders {
-        for part in f.split(|c| c == ',' || c == '\n') {
+        for part in f.split([',', '\n']) {
             let trimmed = part.trim();
             if trimmed.is_empty() {
                 continue;
@@ -385,26 +395,26 @@ fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
     None
 }
 
-/// Starts a port forwarding session for the specified EC2 instance and remote port, optionally using a 
+/// Starts a port forwarding session for the specified EC2 instance and remote port, optionally using a
 /// specified local port and remote host.
 /// Args:
 ///   instance_id: The ID of the EC2 instance to connect to (e.g. "i-0123456789abcdef0")
-///   req: A StartPortReq struct containing the remote port to forward, an optional local port to use 
-///        (if not specified, a free port will be automatically selected), and an optional remote host 
+///   req: A StartPortReq struct containing the remote port to forward, an optional local port to use
+///        (if not specified, a free port will be automatically selected), and an optional remote host
 ///        to connect to (defaults to "localhost" if not specified)
 ///   state: The application state containing preferences and active connections
 /// Returns:
-///   On success, returns a JSON response containing the connection ID and connection information 
-///   (including the local port that was used). On failure, returns an error response with an appropriate 
+///   On success, returns a JSON response containing the connection ID and connection information
+///   (including the local port that was used). On failure, returns an error response with an appropriate
 ///   HTTP status code and error message (e.g. if no free local ports are available, or if the instance ID is
-///   invalid). The function will attempt to find a free local port if one is not specified in the request, 
-///   and will create a new ConnectionInfo struct to represent the active connection, which is then stored 
-///   in the application state for tracking. The connection information includes the command that can be used 
+///   invalid). The function will attempt to find a free local port if one is not specified in the request,
+///   and will create a new ConnectionInfo struct to represent the active connection, which is then stored
+///   in the application state for tracking. The connection information includes the command that can be used
 ///   to start the port forwarding session using AWS SSM.  
-/// Note: The actual implementation of starting the port forwarding session (e.g. invoking the AWS CLI or SDK 
-/// to start the session) is not included in this function, as it is assumed that the client will use 
-/// the provided connection information to initiate the session separately. This function is primarily 
-/// responsible for managing the connection information and ensuring that a free local port is allocated 
+/// Note: The actual implementation of starting the port forwarding session (e.g. invoking the AWS CLI or SDK
+/// to start the session) is not included in this function, as it is assumed that the client will use
+/// the provided connection information to initiate the session separately. This function is primarily
+/// responsible for managing the connection information and ensuring that a free local port is allocated
 /// for the session.
 async fn start_port(
     instance_id: String,
@@ -427,8 +437,14 @@ async fn start_port(
 
     let info = ConnectionInfo {
         id: uuid::Uuid::new_v4(),
-        profile: prefs.last_profile.clone().unwrap_or_else(|| "default".into()),
-        region: prefs.last_region.clone().unwrap_or_else(|| "us-east-1".into()),
+        profile: prefs
+            .last_profile
+            .clone()
+            .unwrap_or_else(|| "default".into()),
+        region: prefs
+            .last_region
+            .clone()
+            .unwrap_or_else(|| "us-east-1".into()),
         instance_id,
         local_port: local,
         remote_port: req.remote_port,
@@ -449,21 +465,25 @@ async fn start_port(
         info.remote_port,
         info.key_name
     );
-    state
-        .connections
-        .lock()
-        .await
-        .insert(info.id, ManagedConnection { info: info.clone(), child: Some(child) });
-
-    let connection_info = build_connection_info(
-        &info.instance_id,
-        req.remote_port,
-        local,
-        req.remote_host.as_deref(),
-        &prefs.ssh_options,
-        info.key_name.as_deref(),
-        info.key_path.as_deref(),
+    state.connections.lock().await.insert(
+        info.id,
+        ManagedConnection {
+            info: info.clone(),
+            child: Some(child),
+        },
     );
+
+    let connection_info = build_connection_info(ConnectionInfoArgs {
+        instance_id: &info.instance_id,
+        remote_port: req.remote_port,
+        local_port: local,
+        remote_host: req.remote_host.as_deref(),
+        ssh_options: &prefs.ssh_options,
+        key_name: info.key_name.as_deref(),
+        key_path: info.key_path.as_deref(),
+        linux_username: &prefs.linux_username,
+        windows_username: &prefs.windows_username,
+    });
 
     Ok(ok(serde_json::json!({
         "connection_id": info.id,
@@ -474,6 +494,7 @@ async fn start_port(
     })))
 }
 
+/// Starts a standard SSH tunnel for the given EC2 instance.
 pub async fn ssh(Path(instance_id): Path<String>, state: State<AppState>) -> impl IntoResponse {
     start_port(
         instance_id,
@@ -487,6 +508,7 @@ pub async fn ssh(Path(instance_id): Path<String>, state: State<AppState>) -> imp
     .await
 }
 
+/// Starts an RDP tunnel for the given EC2 instance.
 pub async fn rdp(Path(instance_id): Path<String>, state: State<AppState>) -> impl IntoResponse {
     start_port(
         instance_id,
@@ -500,6 +522,7 @@ pub async fn rdp(Path(instance_id): Path<String>, state: State<AppState>) -> imp
     .await
 }
 
+/// Starts a custom port-forwarding session using the provided request body.
 pub async fn custom_port(
     Path(instance_id): Path<String>,
     state: State<AppState>,
@@ -508,6 +531,7 @@ pub async fn custom_port(
     start_port(instance_id, req, state).await
 }
 
+/// Terminates a single active connection by ID.
 pub async fn terminate(
     Path(conn_id): Path<uuid::Uuid>,
     State(state): State<AppState>,
@@ -521,12 +545,13 @@ pub async fn terminate(
             let _ = child.kill().await;
         }
         tracing::info!("Terminated connection {}", conn_id);
-        return Ok(ok(serde_json::json!({})));
+        Ok(ok(serde_json::json!({})))
     } else {
-        return Err(err(StatusCode::NOT_FOUND, "Connection not found"));
+        Err(err(StatusCode::NOT_FOUND, "Connection not found"))
     }
 }
 
+/// Terminates all active connections.
 pub async fn terminate_all(State(state): State<AppState>) -> impl IntoResponse {
     let mut lock = state.connections.lock().await;
     for mc in lock.values_mut() {
@@ -539,6 +564,7 @@ pub async fn terminate_all(State(state): State<AppState>) -> impl IntoResponse {
     ok(serde_json::json!({"message": "All connections terminated"}))
 }
 
+/// Returns the list of currently active connections.
 pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
     let prefs = state.prefs.read().await.clone();
     let vals: Vec<_> = state
@@ -547,15 +573,17 @@ pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
         .await
         .values()
         .map(|mc| {
-            let connection_info = build_connection_info(
-                &mc.info.instance_id,
-                mc.info.remote_port,
-                mc.info.local_port,
-                mc.info.remote_host.as_deref(),
-                &prefs.ssh_options,
-                mc.info.key_name.as_deref(),
-                mc.info.key_path.as_deref(),
-            );
+            let connection_info = build_connection_info(ConnectionInfoArgs {
+                instance_id: &mc.info.instance_id,
+                remote_port: mc.info.remote_port,
+                local_port: mc.info.local_port,
+                remote_host: mc.info.remote_host.as_deref(),
+                ssh_options: &prefs.ssh_options,
+                key_name: mc.info.key_name.as_deref(),
+                key_path: mc.info.key_path.as_deref(),
+                linux_username: &prefs.linux_username,
+                windows_username: &prefs.windows_username,
+            });
             serde_json::json!({
                 "connection_id": mc.info.id,
                 "id": mc.info.id,
@@ -570,11 +598,10 @@ pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
                 "key_path": mc.info.key_path,
                 "connection_info": connection_info,
             })
-        })
-        .collect();
+    })
+    .collect();
     Json(vals)
 }
-
 
 /// Signal the server to shut down gracefully.
 pub async fn quit(State(state): State<AppState>) -> impl IntoResponse {
@@ -582,6 +609,7 @@ pub async fn quit(State(state): State<AppState>) -> impl IntoResponse {
     ok(serde_json::json!({"message": "Shutting down"}))
 }
 
+/// Launches an RDP client on the local machine.
 pub async fn rdp_client_connect(
     Json(req): Json<RdpClientReq>,
 ) -> Result<
@@ -613,13 +641,19 @@ pub async fn rdp_client_connect(
     Ok(ok(serde_json::json!({ "message": message })))
 }
 
-fn launch_rdp_client(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
+/// Launches a platform-specific RDP client for the supplied request.
+fn launch_rdp_client(
+    req: &RdpClientReq,
+) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
     info!(
         "Launching RDP client ip={} port={} user={} has_password={}",
         req.ip,
         req.port,
         req.username,
-        req.password.as_ref().map(|p| !p.is_empty()).unwrap_or(false)
+        req.password
+            .as_ref()
+            .map(|p| !p.is_empty())
+            .unwrap_or(false)
     );
     match std::env::consts::OS {
         "windows" => launch_rdp_windows(req),
@@ -632,9 +666,18 @@ fn launch_rdp_client(req: &RdpClientReq) -> Result<String, (StatusCode, Json<cra
     }
 }
 
-fn build_rdp_file(ip: &str, port: u16, username: &str, password: &Option<String>) -> Result<PathBuf, std::io::Error> {
+/// Writes a temporary RDP configuration file used by the OS client.
+fn build_rdp_file(
+    ip: &str,
+    port: u16,
+    username: &str,
+    password: &Option<String>,
+) -> Result<PathBuf, std::io::Error> {
     let mut path = std::env::temp_dir();
-    path.push(format!("ssm-remote-session-gateway-{}.rdp", uuid::Uuid::new_v4()));
+    path.push(format!(
+        "ssm-remote-session-gateway-{}.rdp",
+        uuid::Uuid::new_v4()
+    ));
 
     let mut contents = format!("full address:s:{ip}:{port}\nusername:s:{username}\n");
     if let Some(pw) = password {
@@ -645,9 +688,16 @@ fn build_rdp_file(ip: &str, port: u16, username: &str, password: &Option<String>
     Ok(path)
 }
 
-fn launch_rdp_windows(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
-    let path = build_rdp_file(&req.ip, req.port, &req.username, &None)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create RDP file: {e}")))?;
+/// Launches `mstsc` on Windows using a temporary RDP file.
+fn launch_rdp_windows(
+    req: &RdpClientReq,
+) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
+    let path = build_rdp_file(&req.ip, req.port, &req.username, &None).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create RDP file: {e}"),
+        )
+    })?;
 
     let path_str = path
         .to_str()
@@ -660,7 +710,10 @@ fn launch_rdp_windows(req: &RdpClientReq) -> Result<String, (StatusCode, Json<cr
         .spawn()
         .map_err(|e| {
             error!("RDP windows launch failed: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to launch mstsc: {e}"))
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to launch mstsc: {e}"),
+            )
         })?;
 
     schedule_cleanup(path);
@@ -670,9 +723,16 @@ fn launch_rdp_windows(req: &RdpClientReq) -> Result<String, (StatusCode, Json<cr
     ))
 }
 
-fn launch_rdp_macos(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
-    let path = build_rdp_file(&req.ip, req.port, &req.username, &req.password)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create RDP file: {e}")))?;
+/// Attempts to open macOS Remote Desktop variants via the generated RDP file.
+fn launch_rdp_macos(
+    req: &RdpClientReq,
+) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
+    let path = build_rdp_file(&req.ip, req.port, &req.username, &req.password).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create RDP file: {e}"),
+        )
+    })?;
 
     let path_str = path
         .to_str()
@@ -696,12 +756,15 @@ fn launch_rdp_macos(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crat
         match result {
             Ok(_) => {
                 schedule_cleanup(path);
-                return Ok(format!("RDP client launched connecting to {}:{}", req.ip, req.port));
+                return Ok(format!(
+                    "RDP client launched connecting to {}:{}",
+                    req.ip, req.port
+                ));
             }
             Err(e) => {
                 error!("RDP macOS launch with {} failed: {}", app, e);
                 last_err = Some(e)
-            },
+            }
         }
     }
 
@@ -714,19 +777,33 @@ fn launch_rdp_macos(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crat
     ))
 }
 
-fn launch_rdp_linux(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
+/// Tries xfreerdp or remmina on Linux, falling back to WSL if needed.
+fn launch_rdp_linux(
+    req: &RdpClientReq,
+) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
     if let Ok(path) = which("xfreerdp") {
-        let mut args = vec![format!("/v:{}:{}", req.ip, req.port), format!("/u:{}", req.username), "/cert:ignore".into()];
+        let mut args = vec![
+            format!("/v:{}:{}", req.ip, req.port),
+            format!("/u:{}", req.username),
+            "/cert:ignore".into(),
+        ];
         if let Some(pw) = &req.password {
             args.push(format!("/p:{pw}"));
         }
-        info!("RDP linux launching xfreerdp: {} {:?}", path.display(), args);
+        info!(
+            "RDP linux launching xfreerdp: {} {:?}",
+            path.display(),
+            args
+        );
         std::process::Command::new(path)
             .args(args)
             .spawn()
             .map_err(|e| {
                 error!("Failed to start xfreerdp: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start xfreerdp: {e}"))
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to start xfreerdp: {e}"),
+                )
             })?;
         return Ok(format!(
             "RDP client (xfreerdp) launched connecting to {}:{}",
@@ -739,13 +816,20 @@ fn launch_rdp_linux(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crat
         if let Some(pw) = &req.password {
             conn = format!("rdp://{}:{}@{}:{}", req.username, pw, req.ip, req.port);
         }
-        info!("RDP linux launching remmina: {} -c {}", path.display(), conn);
+        info!(
+            "RDP linux launching remmina: {} -c {}",
+            path.display(),
+            conn
+        );
         std::process::Command::new(path)
             .args(["-c", &conn])
             .spawn()
             .map_err(|e| {
                 error!("Failed to start remmina: {}", e);
-                err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to start remmina: {e}"))
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to start remmina: {e}"),
+                )
             })?;
         return Ok(format!(
             "RDP client (remmina) launched connecting to {}:{}",
@@ -764,6 +848,7 @@ fn launch_rdp_linux(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crat
     ))
 }
 
+/// Deletes the temporary RDP file after a short delay to keep the temp dir tidy.
 fn schedule_cleanup(path: PathBuf) {
     tokio::spawn(async move {
         time::sleep(Duration::from_secs(10)).await;
@@ -771,6 +856,7 @@ fn schedule_cleanup(path: PathBuf) {
     });
 }
 
+/// Returns true when running under Windows Subsystem for Linux.
 fn is_wsl() -> bool {
     std::env::var("WSL_INTEROP").is_ok()
         || fs::read_to_string("/proc/sys/kernel/osrelease")
@@ -778,9 +864,16 @@ fn is_wsl() -> bool {
             .unwrap_or(false)
 }
 
-fn launch_rdp_windows_from_wsl(req: &RdpClientReq) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
-    let path = build_rdp_file(&req.ip, req.port, &req.username, &req.password)
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to create RDP file: {e}")))?;
+/// Invokes Windows `mstsc` from WSL by translating the temp file path.
+fn launch_rdp_windows_from_wsl(
+    req: &RdpClientReq,
+) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
+    let path = build_rdp_file(&req.ip, req.port, &req.username, &req.password).map_err(|e| {
+        err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to create RDP file: {e}"),
+        )
+    })?;
 
     let linux_path = path
         .to_str()
@@ -790,7 +883,12 @@ fn launch_rdp_windows_from_wsl(req: &RdpClientReq) -> Result<String, (StatusCode
     let output = Command::new("wslpath")
         .args(["-w", linux_path])
         .output()
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wslpath failed: {e}")))?;
+        .map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("wslpath failed: {e}"),
+            )
+        })?;
 
     if !output.status.success() {
         return Err(err(
@@ -807,7 +905,10 @@ fn launch_rdp_windows_from_wsl(req: &RdpClientReq) -> Result<String, (StatusCode
         .spawn()
         .map_err(|e| {
             error!("Failed to launch mstsc via WSL: {}", e);
-            err(StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to launch mstsc via WSL: {e}"))
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to launch mstsc via WSL: {e}"),
+            )
         })?;
 
     schedule_cleanup(path);

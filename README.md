@@ -96,7 +96,7 @@ cd ssm-remote-session-gateway
 cargo run
 ```
 
-The server listens on `http://127.0.0.1:5000` and serves both the UI and `/api/*` endpoints.
+The server listens on `https://127.0.0.1:5000` and serves both the UI and `/api/*` endpoints.
 
 ---
 
@@ -182,9 +182,7 @@ Supports **regular expressions** for advanced filtering.
 #### Port Selection
 - **SSH/RDP**: Automatically uses the same local port as remote port (22 for SSH, 3389 for RDP)
 - **Custom Ports**: Uses the same local port if available, otherwise falls back to configured range
-- **Port Range**: Configurable in Preferences with OS-specific defaults:
-  - **Windows**: 40000-40100 (below ephemeral port range)
-  - **Linux/macOS**: 61000-61100 (above ephemeral port range)
+- **Port Range**: Configurable in Preferences with a default of 61000-61100.
 
 ---
 
@@ -279,6 +277,13 @@ export AWS_DEFAULT_REGION=us-east-1
 
 <details>
 <summary><b>SSH key not found for RDP password decryption</b></summary>
+
+**Solutions:**
+- Ensure your instance has a key pair attached and you know the key name.
+- Add the key directory to Preferences (Settings -> SSH Key Folders), one path per line.
+- Provide the PEM contents directly when prompted.
+
+</details>
 
 ---
 

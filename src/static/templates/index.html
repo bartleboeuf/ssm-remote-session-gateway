@@ -456,6 +456,27 @@
                                 <div class="form-text small mt-1">Options appended to all SSH commands.</div>
                             </div>
                         </div>
+                        <div class="mb-4 p-3 bg-light rounded-3 border-start border-4 border-warning">
+                            <h6 class="mb-3 text-warning fw-bold"><i class="bi bi-person-fill me-2"></i>Default
+                                Usernames
+                            </h6>
+                            <div class="row g-3">
+                                <div class="col-6">
+                                    <label for="linuxUsername" class="form-label small">Linux Username</label>
+                                    <input type="text" class="form-control form-control-sm" id="linuxUsername"
+                                        placeholder="e.g. ec2-user, ubuntu, admin" aria-describedby="linuxUsernameHelp">
+                                    <div id="linuxUsernameHelp" class="form-text small mt-1">Default SSH user for Linux
+                                        instances.</div>
+                                </div>
+                                <div class="col-6">
+                                    <label for="windowsUsername" class="form-label small">Windows Username</label>
+                                    <input type="text" class="form-control form-control-sm" id="windowsUsername"
+                                        placeholder="e.g. Administrator" aria-describedby="windowsUsernameHelp">
+                                    <div id="windowsUsernameHelp" class="form-text small mt-1">Default RDP user for
+                                        Windows instances.</div>
+                                </div>
+                            </div>
+                        </div>
                         <div class="mb-3 p-3 bg-light rounded-3 border-start border-4 border-info">
                             <h6 class="mb-3 text-info fw-bold"><i class="bi bi-key me-2"></i>SSH Key Discovery</h6>
                             <div id="sshKeyFoldersContainer" class="mb-2">

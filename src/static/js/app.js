@@ -24,7 +24,9 @@ const app = {
         logLevel: 'INFO',
         ssh_key_folder: null,
         ssh_options: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
-        cache_ttl_secs: 3600
+        cache_ttl_secs: 3600,
+        linux_username: 'ec2-user',
+        windows_username: 'Administrator'
     },
     //theme: 'light',
     // Initialize application
@@ -1804,6 +1806,16 @@ app.show_preferences = async function () {
         // Load SSH key folders
         this.load_ssh_key_folders(prefs.ssh_key_folder || '');
 
+        // Load username preferences
+        const linuxUsernameField = document.getElementById('linuxUsername');
+        if (linuxUsernameField) {
+            linuxUsernameField.value = prefs.linux_username || 'ec2-user';
+        }
+        const windowsUsernameField = document.getElementById('windowsUsername');
+        if (windowsUsernameField) {
+            windowsUsernameField.value = prefs.windows_username || 'Administrator';
+        }
+
         // Show the modal
         if (this.modals.preferences) {
             this.modals.preferences.show();
@@ -1836,6 +1848,8 @@ app.save_preferences = async function () {
         const sshOptions = document.getElementById('sshOptions').value.trim() || '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
         const cacheTtlField = document.getElementById('cacheTtl');
         const cacheTtl = cacheTtlField ? parseInt(cacheTtlField.value) : 3600;
+        const linuxUsername = (document.getElementById('linuxUsername')?.value || '').trim() || 'ec2-user';
+        const windowsUsername = (document.getElementById('windowsUsername')?.value || '').trim() || 'Administrator';
 
         // Get SSH key folders (one per line)
         const sshKeyFolders = this.get_ssh_key_folders();
@@ -1871,7 +1885,9 @@ app.save_preferences = async function () {
                 format: "%(asctime)s-%(name)s-%(levelname)s-[%(filename)s:%(lineno)d]-%(message)s"
             },
             ssh_options: sshOptions,
-            cache_ttl_secs: cacheTtl
+            cache_ttl_secs: cacheTtl,
+            linux_username: linuxUsername,
+            windows_username: windowsUsername
         };
 
         // Add SSH key folder if provided (newline-separated)
@@ -1896,6 +1912,8 @@ app.save_preferences = async function () {
             this.preferences.ssh_key_folder = sshKeyFolder;
         }
         this.preferences.cache_ttl_secs = cacheTtl;
+        this.preferences.linux_username = linuxUsername;
+        this.preferences.windows_username = windowsUsername;
 
         // Hide modal and show success message
         if (this.modals.preferences) {
@@ -1928,6 +1946,8 @@ app.load_preferences = async function () {
         this.preferences.ssh_options = prefs.ssh_options || '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null';
         this.preferences.ssh_key_folder = prefs.ssh_key_folder || null;
         this.preferences.cache_ttl_secs = prefs.cache_ttl_secs || 3600;
+        this.preferences.linux_username = prefs.linux_username || 'ec2-user';
+        this.preferences.windows_username = prefs.windows_username || 'Administrator';
 
         // Also store full structure for compatibility
         this.preferences.port_range = prefs.port_range;

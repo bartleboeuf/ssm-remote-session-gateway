@@ -1,6 +1,7 @@
 .vscode/
 certs/
 python/
+TODO.md
 
 # C extensions
 *.so

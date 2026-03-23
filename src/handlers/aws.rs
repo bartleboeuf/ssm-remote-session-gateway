@@ -1,3 +1,4 @@
+use anyhow::Result;
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;
 use aws_config::retry::RetryConfig;
@@ -9,7 +10,6 @@ use aws_sdk_iam as iam;
 use aws_sdk_ssm as ssm;
 use aws_sdk_sts as sts;
 use aws_types::region::Region;
-use anyhow::Result;
 use axum::{
     Json,
     extract::{Path, Query},
@@ -21,15 +21,216 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rsa::pkcs8::DecodePrivateKey;
 use rsa::{Pkcs1v15Encrypt, RsaPrivateKey};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::fs;
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tokio::sync::Notify;
+use tokio::task::JoinSet;
 use which::which;
 
-use crate::models::{CachedInstances, ConnectRequest, ErrorResponse, InstanceItem, WindowsPasswordReq, ok};
+use crate::models::{
+    CachedInstances, ConnectRequest, ErrorResponse, InstanceItem, WindowsPasswordReq, ok,
+};
 use crate::state::AppState;
 use axum::extract::State;
 use serde::Deserialize;
 use tracing::{error, info, warn};
+
+/// Builds a fully configured AWS SDK loader, allowing overrides for retries and timeouts.
+async fn load_aws_config(
+    profile: &str,
+    region: RegionProviderChain,
+    retry_config: Option<RetryConfig>,
+    timeout_config: Option<TimeoutConfig>,
+) -> aws_config::SdkConfig {
+    let mut loader = aws_config::from_env()
+        .profile_name(profile)
+        .behavior_version(BehaviorVersion::latest());
+
+    loader = loader.region(region);
+    if let Some(retry_config) = retry_config {
+        loader = loader.retry_config(retry_config);
+    }
+    if let Some(timeout_config) = timeout_config {
+        loader = loader.timeout_config(timeout_config);
+    }
+
+    loader.load().await
+}
+
+/// Creates a RegionProviderChain from an optional region string, falling back to default providers.
+fn region_chain(region: Option<String>) -> RegionProviderChain {
+    if let Some(region) = region {
+        RegionProviderChain::first_try(Region::new(region)).or_default_provider()
+    } else {
+        RegionProviderChain::default_provider()
+    }
+}
+
+/// Loads the instance cache from disk into memory if the cache is currently empty.
+pub async fn load_instance_cache_from_disk(state: &AppState) {
+    let need_load = { state.instance_cache.lock().await.is_empty() };
+    if !need_load {
+        return;
+    }
+
+    let path = crate::models::Preferences::cache_path();
+    match tokio::fs::read_to_string(&path).await {
+        Ok(data) => {
+            match serde_json::from_str::<std::collections::HashMap<String, CachedInstances>>(&data)
+            {
+                Ok(map) => {
+                    let mut cache = state.instance_cache.lock().await;
+                    if cache.is_empty() {
+                        *cache = map;
+                        info!("Loaded instance cache from disk");
+                    }
+                }
+                Err(e) => warn!("Failed to parse instance cache file: {e}"),
+            }
+        }
+        Err(err) => {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!("Failed to read instance cache file: {err}");
+            }
+        }
+    }
+}
+
+/// Persists the instance cache map to disk after ensuring the cache directory exists.
+async fn save_instance_cache(
+    cache: &std::collections::HashMap<String, CachedInstances>,
+) -> Result<()> {
+    crate::models::Preferences::ensure_cache_dir().await?;
+    let path = crate::models::Preferences::cache_path();
+    let data = serde_json::to_string_pretty(cache)?;
+    tokio::fs::write(path, data).await?;
+    Ok(())
+}
+
+struct RefreshSlot {
+    notify: Arc<Notify>,
+    leader: bool,
+}
+
+/// Claims a refresh slot for the given cache key, preventing concurrent AWS calls.
+async fn register_instance_refresh(state: &AppState, cache_key: &str) -> RefreshSlot {
+    let mut refreshes = state.instance_refreshes.lock().await;
+    if let Some(existing) = refreshes.get(cache_key) {
+        return RefreshSlot {
+            notify: existing.clone(),
+            leader: false,
+        };
+    }
+
+    let notify = Arc::new(Notify::new());
+    refreshes.insert(cache_key.to_string(), notify.clone());
+    RefreshSlot {
+        notify,
+        leader: true,
+    }
+}
+
+/// Releases a refresh slot and notifies waiters that the cache key was refreshed.
+async fn complete_instance_refresh(state: &AppState, cache_key: &str) {
+    let notify = {
+        let mut refreshes = state.instance_refreshes.lock().await;
+        refreshes.remove(cache_key)
+    };
+
+    if let Some(notify) = notify {
+        notify.notify_waiters();
+    }
+}
+
+/// Filters cached instances according to the requested state and OS filters.
+fn filter_cached_instances(
+    entries: Vec<InstanceItem>,
+    params: &InstanceListParams,
+) -> Vec<InstanceItem> {
+    entries
+        .into_iter()
+        .filter(|i| {
+            let state_ok = match &params.filter_state {
+                Some(f) if !f.is_empty() && f != "all" => i.state == *f,
+                _ => true,
+            };
+            let os_ok = match &params.filter_os {
+                Some(os) if !os.is_empty() && os != "all" => i.os == *os,
+                _ => true,
+            };
+            state_ok && os_ok
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{InstanceItem, Preferences};
+    use tokio::sync::RwLock;
+
+    /// Builds a minimal AppState for unit tests.
+    fn test_state() -> AppState {
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        AppState {
+            prefs: Arc::new(RwLock::new(Preferences::default())),
+            connections: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            instance_cache: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            instance_refreshes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            shutdown_tx,
+        }
+    }
+
+    #[test]
+    /// Ensures filtering honors state and OS parameters.
+    fn filter_cached_instances_applies_state_and_os_filters() {
+        let entries = vec![
+            InstanceItem {
+                id: "i-1".into(),
+                name: "one".into(),
+                typ: "t3.micro".into(),
+                state: "running".into(),
+                os: "Linux".into(),
+                has_ssm: true,
+            },
+            InstanceItem {
+                id: "i-2".into(),
+                name: "two".into(),
+                typ: "t3.micro".into(),
+                state: "stopped".into(),
+                os: "Windows".into(),
+                has_ssm: false,
+            },
+        ];
+
+        let params = InstanceListParams {
+            filter_state: Some("running".into()),
+            filter_os: Some("Linux".into()),
+        };
+
+        let filtered = filter_cached_instances(entries, &params);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "i-1");
+    }
+
+    #[tokio::test]
+    /// Verifies the refresh tracker assigns a single leader and wakes waiters.
+    async fn refresh_tracker_marks_one_leader_and_one_waiter() {
+        let state = test_state();
+
+        let first = register_instance_refresh(&state, "default|us-east-1").await;
+        assert!(first.leader);
+
+        let second = register_instance_refresh(&state, "default|us-east-1").await;
+        assert!(!second.leader);
+
+        complete_instance_refresh(&state, "default|us-east-1").await;
+        assert!(state.instance_refreshes.lock().await.is_empty());
+    }
+}
 
 /// Checks if AWS credentials are configured
 /// This function attempts to load AWS configuration and credentials using the AWS SDK's default provider chain.
@@ -113,7 +314,7 @@ pub async fn list_profiles() -> impl IntoResponse {
     if let Some(home) = dirs::home_dir() {
         for fname in [".aws/credentials", ".aws/config"] {
             let path = home.join(fname);
-            if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 for line in content.lines() {
                     let line = line.trim();
                     if line.starts_with('[') && line.ends_with(']') {
@@ -142,12 +343,12 @@ pub struct RegionParams {
 /// Returns:
 ///   List of region names (e.g. ["us-east-1", "us-west-2", ...])
 /// Raises:
-///   ClientError: If AWS API call fails or credentials are invalid. The error message will include details from 
+///   ClientError: If AWS API call fails or credentials are invalid. The error message will include details from
 /// the AWS SDK error to help diagnose issues (e.g. invalid credentials, permission issues, network issues).
-/// Note: This function will attempt to load AWS configuration and credentials based on the provided profile, 
-/// falling back to defaults if not specified. It will then call EC2 DescribeRegions API to retrieve the list 
-/// of regions available to the credentials. If successful, it returns a sorted list of region names. 
-/// If it encounters any errors (e.g. invalid credentials, permission issues), it logs the error details and 
+/// Note: This function will attempt to load AWS configuration and credentials based on the provided profile,
+/// falling back to defaults if not specified. It will then call EC2 DescribeRegions API to retrieve the list
+/// of regions available to the credentials. If successful, it returns a sorted list of region names.
+/// If it encounters any errors (e.g. invalid credentials, permission issues), it logs the error details and
 /// returns a structured JSON response with an error message.
 pub async fn list_regions(
     State(state): State<AppState>,
@@ -161,20 +362,29 @@ pub async fn list_regions(
         .or_else(|| prefs.last_profile.clone())
         .unwrap_or_else(|| "default".into());
 
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .load()
-        .await;
+    let cfg = load_aws_config(&profile, region_chain(None), None, None).await;
 
     let client = ec2::Client::new(&cfg);
-    match client.describe_regions().all_regions(true).filters(ec2::types::Filter::builder().name("opt-in-status").values("opt-in-not-required").values("opted-in").build()).send().await {
+    match client
+        .describe_regions()
+        .all_regions(true)
+        .filters(
+            ec2::types::Filter::builder()
+                .name("opt-in-status")
+                .values("opt-in-not-required")
+                .values("opted-in")
+                .build(),
+        )
+        .send()
+        .await
+    {
         Ok(resp) => {
             let region_list: &[ec2::types::Region] = resp.regions();
             let mut regions: Vec<String> = region_list
                 .iter()
                 .filter_map(|r: &ec2::types::Region| r.region_name().map(|s| s.to_string()))
                 .collect();
-            
+
             regions.sort();
             info!("list_regions success: {} regions", regions.len());
             Json(serde_json::json!({ "ok": true, "data": regions, "error": null }))
@@ -199,12 +409,12 @@ pub async fn list_regions(
 ///   account_id: AWS account ID associated with the credentials
 ///   account_alias: (optional) AWS account alias if available, requires additional IAM permissions
 /// Raises:
-///   BadRequest: If credential validation fails or API calls return errors. The error message will include details 
+///   BadRequest: If credential validation fails or API calls return errors. The error message will include details
 /// from the AWS SDK error to help diagnose issues (e.g. invalid credentials, permission issues
-/// Note: This function will attempt to load AWS configuration and credentials based on the provided profile and region, 
-/// falling back to defaults if not specified. It will then call STS GetCallerIdentity to validate the credentials and 
-/// extract the account ID. If successful, it will also attempt to retrieve the account alias using IAM ListAccountAliases, 
-/// but this is optional and will not cause the whole operation to fail if it encounters permission issues. 
+/// Note: This function will attempt to load AWS configuration and credentials based on the provided profile and region,
+/// falling back to defaults if not specified. It will then call STS GetCallerIdentity to validate the credentials and
+/// extract the account ID. If successful, it will also attempt to retrieve the account alias using IAM ListAccountAliases,
+/// but this is optional and will not cause the whole operation to fail if it encounters permission issues.
 /// The function returns a structured JSON response with the account information or an error message.
 pub async fn connect(
     State(state): State<AppState>,
@@ -215,21 +425,18 @@ pub async fn connect(
         "connect called profile={} region={}",
         body.profile, body.region
     );
-    let region_provider = RegionProviderChain::first_try(Some(Region::new(body.region.clone())))
-        .or_default_provider();
-
-    let cfg = aws_config::from_env()
-        .profile_name(&body.profile)
-        .region(region_provider)
-        .retry_config(RetryConfig::standard().with_max_attempts(3))
-        .timeout_config(
+    let cfg = load_aws_config(
+        &body.profile,
+        region_chain(Some(body.region.clone())),
+        Some(RetryConfig::standard().with_max_attempts(3)),
+        Some(
             TimeoutConfig::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .read_timeout(Duration::from_secs(30))
                 .build(),
-        )
-        .load()
-        .await;
+        ),
+    )
+    .await;
 
     let sts_client = sts::Client::new(&cfg);
     let identity = match sts_client.get_caller_identity().send().await {
@@ -254,12 +461,13 @@ pub async fn connect(
         }
     };
 
-    {
+    let prefs_snapshot = {
         let mut prefs = state.prefs.write().await;
         prefs.last_profile = Some(body.profile.clone());
         prefs.last_region = Some(body.region.clone());
-        prefs.save();
-    }
+        prefs.clone()
+    };
+    prefs_snapshot.save().await;
 
     info!("connect success account_id={}", account_id);
     Ok(ok(serde_json::json!({
@@ -275,43 +483,75 @@ pub struct InstanceListParams {
     pub filter_os: Option<String>,
 }
 
-/// Checks if the given EC2 instance has SSM agent installed and is managed by SSM.
-/// This is done by calling DescribeInstanceInformation API which only returns instances that are registered with SSM.
-/// Returns true if instance is found in the SSM inventory, false otherwise. Any API errors are logged and treated as 
-/// "not found" to avoid blocking functionality due to permission issues or transient errors.
-/// Note: This is a best-effort check and may not be 100% accurate due to eventual consistency of SSM inventory and 
-/// potential permission issues. In a real implementation, you might want to cache results or provide a way to refresh 
-/// the SSM status of instances.
-/// Args:
-///   client: SSM client to call SSM API
-///   instance_id: ID of the EC2 instance to check
-/// Returns:
-///   bool indicating whether the instance is managed by SSM
-/// Raises:
-///   None. Any errors are logged and result in a false return value.
+/// Returns the subset of instance IDs that are managed by SSM.
 ///
-async fn check_have_ssm(client: &ssm::Client, instance_id: &str) -> bool {
-    match client
-        .describe_instance_information()
-        .filters(
-            ssm::types::InstanceInformationStringFilter::builder()
-                .key("InstanceIds")
-                .values(instance_id)
-                .build()
-                .unwrap(),
-        )
-        .send()
-        .await
-    {
-        Ok(resp) => !resp.instance_information_list().is_empty(),
-        Err(e) => {
-            warn!(
-                "SSM availability check failed for instance {}: {e}",
-                instance_id
-            );
-            false
+/// This batches `DescribeInstanceInformation` calls so a large region only needs a few
+/// SSM requests instead of one request per EC2 instance.
+async fn fetch_managed_instance_ids(
+    client: &ssm::Client,
+    instance_ids: &[String],
+) -> HashSet<String> {
+    const BATCH_SIZE: usize = 40;
+    const MAX_CONCURRENT_BATCHES: usize = 6;
+
+    let mut managed_ids = HashSet::new();
+    let mut join_set = JoinSet::new();
+    let mut in_flight = 0usize;
+
+    for batch in instance_ids.chunks(BATCH_SIZE) {
+        let client = client.clone();
+        let batch = batch.to_vec();
+        join_set.spawn(async move {
+            let mut filter =
+                ssm::types::InstanceInformationStringFilter::builder().key("InstanceIds");
+            for instance_id in &batch {
+                filter = filter.values(instance_id.clone());
+            }
+
+            let mut batch_ids = HashSet::new();
+            match client
+                .describe_instance_information()
+                .filters(filter.build().unwrap())
+                .max_results(batch.len() as i32)
+                .send()
+                .await
+            {
+                Ok(resp) => {
+                    for info in resp.instance_information_list() {
+                        if let Some(instance_id) = info.instance_id() {
+                            batch_ids.insert(instance_id.to_string());
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "SSM batch availability check failed for {} instances: {e}",
+                        batch.len()
+                    );
+                }
+            }
+
+            batch_ids
+        });
+        in_flight += 1;
+        if in_flight >= MAX_CONCURRENT_BATCHES
+            && let Some(Ok(batch_ids)) = join_set.join_next().await
+        {
+            managed_ids.extend(batch_ids);
+            in_flight -= 1;
         }
     }
+
+    while in_flight > 0 {
+        match join_set.join_next().await {
+            Some(Ok(batch_ids)) => managed_ids.extend(batch_ids),
+            Some(Err(err)) => warn!("SSM batch task failed: {err}"),
+            None => break,
+        }
+        in_flight -= 1;
+    }
+
+    managed_ids
 }
 
 /// List EC2 instances in the current region with optional state filter.
@@ -325,177 +565,172 @@ pub async fn list_instances(
     State(state): State<AppState>,
     Query(params): Query<InstanceListParams>,
 ) -> impl IntoResponse {
-    info!("list_instances called filter_state={:?}", params.filter_state);
-    load_cache_from_disk_if_needed(&state).await;
+    info!(
+        "list_instances called filter_state={:?}",
+        params.filter_state
+    );
+    load_instance_cache_from_disk(&state).await;
 
-    let prefs = state.prefs.read().await;
+    let prefs = state.prefs.read().await.clone();
     let profile = prefs
         .last_profile
         .clone()
         .unwrap_or_else(|| "default".into());
-    let region_chain = prefs
+    let region_provider = region_chain(prefs
         .last_region
-        .clone()
-        .map(Region::new)
-        .map(RegionProviderChain::first_try)
-        .unwrap_or_else(RegionProviderChain::default_provider);
-
-    // Resolve concrete region string for cache key before moving the chain
-    let resolved_region = region_chain
+        .clone());
+    let resolved_region = region_provider
         .region()
         .await
         .map(|r| r.to_string())
         .unwrap_or_else(|| "us-east-1".to_string());
-
-    // Cache key is profile + region
     let cache_key = format!("{}|{}", profile, resolved_region);
+    let ttl = prefs.cache_ttl_secs as i64;
 
-    // If cached, return filtered result
     if let Some(cached) = {
         let cache = state.instance_cache.lock().await;
         cache.get(&cache_key).cloned()
     } {
         let now = now_secs();
-        let ttl = prefs.cache_ttl_secs as i64;
         if now - cached.fetched_at <= ttl {
             info!("list_instances cache hit for {}", cache_key);
-            let filtered: Vec<_> = cached
-                .entries
-                .into_iter()
-                .filter(|i| {
-                    let state_ok = match &params.filter_state {
-                        Some(f) if !f.is_empty() && f != "all" => i.state == *f,
-                        _ => true,
-                    };
-                    let os_ok = match &params.filter_os {
-                        Some(os) if !os.is_empty() && os != "all" => i.os == *os,
-                        _ => true,
-                    };
-                    state_ok && os_ok
-                })
-                .collect();
-            return Json(filtered).into_response();
+            return Json(filter_cached_instances(cached.entries, &params)).into_response();
         } else {
             info!("list_instances cache expired for {}", cache_key);
         }
     }
-    info!("list_instances cache miss for {}; querying AWS", cache_key);
+    loop {
+        let slot = register_instance_refresh(&state, &cache_key).await;
+        if !slot.leader {
+            info!(
+                "list_instances waiting for in-flight refresh for {}",
+                cache_key
+            );
+            slot.notify.notified().await;
+            if let Some(cached) = {
+                let cache = state.instance_cache.lock().await;
+                cache.get(&cache_key).cloned()
+            } {
+                let now = now_secs();
+                if now - cached.fetched_at <= ttl {
+                    return Json(filter_cached_instances(cached.entries, &params)).into_response();
+                }
+            }
+            continue;
+        }
 
-    let region_chain_for_cfg = prefs
-        .last_region
-        .clone()
-        .map(Region::new)
-        .map(RegionProviderChain::first_try)
-        .unwrap_or_else(RegionProviderChain::default_provider);
+        info!("list_instances cache miss for {}; querying AWS", cache_key);
 
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .region(region_chain_for_cfg)
-        .retry_config(RetryConfig::standard().with_max_attempts(3))
-        .timeout_config(
-            TimeoutConfig::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .read_timeout(Duration::from_secs(30))
-                .build(),
+        let cfg = load_aws_config(
+            &profile,
+            region_chain(prefs.last_region.clone()),
+            Some(RetryConfig::standard().with_max_attempts(3)),
+            Some(
+                TimeoutConfig::builder()
+                    .connect_timeout(Duration::from_secs(10))
+                    .read_timeout(Duration::from_secs(30))
+                    .build(),
+            ),
         )
-        .load()
         .await;
 
-    let ec2_client = ec2::Client::new(&cfg);
-    let ssm_client = ssm::Client::new(&cfg);
+        let ec2_client = ec2::Client::new(&cfg);
+        let ssm_client = ssm::Client::new(&cfg);
 
-    let mut instances: Vec<InstanceItem> = Vec::new();
-    let mut next_token: Option<String> = None;
-    loop {
-        let mut req = ec2_client.describe_instances();
-        if let Some(token) = next_token.take() {
-            req = req.next_token(token);
-        }
-        // removed AWS-side filter so that the cache receives all instances
-
-        let resp = match req.send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("list_instances describe_instances failed: {e}");
-                return crate::models::err(
-                    StatusCode::BAD_REQUEST,
-                    format!("AWS error: {}", e.message().unwrap_or_default()),
-                )
-                .into_response();
+        let mut instance_meta: Vec<(String, String, String, String, String)> = Vec::new();
+        let mut next_token: Option<String> = None;
+        loop {
+            let mut req = ec2_client.describe_instances();
+            if let Some(token) = next_token.take() {
+                req = req.next_token(token);
             }
-        };
 
-        for inst in resp.reservations().iter().flat_map(|r| r.instances()) {
-            let iid = inst.instance_id().unwrap_or("").to_string();
-            let name = inst
-                .tags()
-                .iter()
-                .find(|t| t.key() == Some("Name"))
-                .and_then(|t| t.value())
-                .unwrap_or(iid.as_str())
-                .to_string();
-            let platform = inst.platform_details().unwrap_or("Linux");
-            let state = inst
-                .state()
-                .and_then(|s| s.name())
-                .map(|s| s.as_str())
-                .unwrap_or("")
-                .to_string();
-            let typ = inst
-                .instance_type()
-                .map(|t| t.as_str())
-                .unwrap_or("")
-                .to_string();
-            let has_ssm = check_have_ssm(&ssm_client, iid.as_str()).await;
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("list_instances describe_instances failed: {e}");
+                    complete_instance_refresh(&state, &cache_key).await;
+                    return crate::models::err(
+                        StatusCode::BAD_REQUEST,
+                        format!("AWS error: {}", e.message().unwrap_or_default()),
+                    )
+                    .into_response();
+                }
+            };
 
-            instances.push(InstanceItem {
-                id: iid,
-                name,
-                typ,
-                state,
-                os: if platform.contains("Windows") {
+            for inst in resp.reservations().iter().flat_map(|r| r.instances()) {
+                let iid = inst.instance_id().unwrap_or("").to_string();
+                let name = inst
+                    .tags()
+                    .iter()
+                    .find(|t| t.key() == Some("Name"))
+                    .and_then(|t| t.value())
+                    .unwrap_or(iid.as_str())
+                    .to_string();
+                let platform = inst.platform_details().unwrap_or("Linux");
+                let state = inst
+                    .state()
+                    .and_then(|s| s.name())
+                    .map(|s| s.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let typ = inst
+                    .instance_type()
+                    .map(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let os = if platform.contains("Windows") {
                     "Windows".into()
                 } else {
                     "Linux".into()
+                };
+
+                instance_meta.push((iid, name, typ, state, os));
+            }
+
+            next_token = resp.next_token().map(|t| t.to_string());
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        let instance_ids: Vec<String> = instance_meta
+            .iter()
+            .map(|(id, _, _, _, _)| id.clone())
+            .collect();
+        let managed_instance_ids = fetch_managed_instance_ids(&ssm_client, &instance_ids).await;
+
+        let instances: Vec<InstanceItem> = instance_meta
+            .into_iter()
+            .map(|(id, name, typ, state, os)| InstanceItem {
+                has_ssm: managed_instance_ids.contains(&id),
+                id,
+                name,
+                typ,
+                state,
+                os,
+            })
+            .collect();
+
+        let cache_snapshot = {
+            let mut cache = state.instance_cache.lock().await;
+            cache.insert(
+                cache_key.clone(),
+                CachedInstances {
+                    fetched_at: now_secs(),
+                    entries: instances.clone(),
                 },
-                has_ssm,
-            });
-        }
+            );
+            cache.clone()
+        };
 
-        next_token = resp.next_token().map(|t| t.to_string());
-        if next_token.is_none() {
-            break;
-        }
-    }
-
-    // Store in cache
-    {
-        let mut cache = state.instance_cache.lock().await;
-        cache.insert(
-            cache_key.clone(),
-            CachedInstances {
-                fetched_at: now_secs(),
-                entries: instances.clone(),
-            },
-        );
-        if let Err(e) = save_cache_to_disk(&*cache) {
+        if let Err(e) = save_instance_cache(&cache_snapshot).await {
             warn!("Failed to persist instance cache: {e}");
         }
-    }
 
-    // Apply filters when not served from cache
-    if let Some(os) = &params.filter_os {
-        if !os.is_empty() && os != "all" {
-            instances.retain(|i| i.os == *os);
-        }
+        complete_instance_refresh(&state, &cache_key).await;
+        return Json(filter_cached_instances(instances, &params)).into_response();
     }
-    if let Some(state_filter) = &params.filter_state {
-        if !state_filter.is_empty() && state_filter != "all" {
-            instances.retain(|i| i.state == *state_filter);
-        }
-    }
-
-    Json(instances).into_response()
 }
 
 /// Get detailed information about a specific EC2 instance.
@@ -507,7 +742,7 @@ pub async fn list_instances(
 /// Raises:
 ///    ClientError: If instance not found or API call fails
 /// Note: In offline mode, this will return a 404 error since we cannot fetch real instance details.
-/// In a real implementation, this function would use the AWS SDK to call describe_instances and 
+/// In a real implementation, this function would use the AWS SDK to call describe_instances and
 /// extract details like IAM role, security groups, etc.
 /// For the purpose of this example, we will return a 404 error to indicate that instance details are not available in offline mode.
 ///
@@ -517,30 +752,23 @@ pub async fn instance_details(
 ) -> impl IntoResponse {
     info!("instance_details called id={instance_id}");
 
-    let prefs = state.prefs.read().await;
+    let prefs = state.prefs.read().await.clone();
     let profile = prefs
         .last_profile
         .clone()
         .unwrap_or_else(|| "default".into());
-    let region_provider = prefs
-        .last_region
-        .clone()
-        .map(Region::new)
-        .map(RegionProviderChain::first_try)
-        .unwrap_or_else(RegionProviderChain::default_provider);
-
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .region(region_provider)
-        .retry_config(RetryConfig::standard().with_max_attempts(3))
-        .timeout_config(
+    let cfg = load_aws_config(
+        &profile,
+        region_chain(prefs.last_region.clone()),
+        Some(RetryConfig::standard().with_max_attempts(3)),
+        Some(
             TimeoutConfig::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .read_timeout(Duration::from_secs(30))
                 .build(),
-        )
-        .load()
-        .await;
+        ),
+    )
+    .await;
 
     let client = ec2::Client::new(&cfg);
 
@@ -552,15 +780,15 @@ pub async fn instance_details(
     {
         Ok(r) => r,
         Err(e) => {
-            if let SdkError::ServiceError(service_err) = &e {
-                if service_err.err().code() == Some("InvalidInstanceID.NotFound") {
-                    warn!("instance {} not found", instance_id);
-                    return crate::models::err(
-                        StatusCode::NOT_FOUND,
-                        format!("Instance {instance_id} not found"),
-                    )
-                    .into_response();
-                }
+            if let SdkError::ServiceError(service_err) = &e
+                && service_err.err().code() == Some("InvalidInstanceID.NotFound")
+            {
+                warn!("instance {} not found", instance_id);
+                return crate::models::err(
+                    StatusCode::NOT_FOUND,
+                    format!("Instance {instance_id} not found"),
+                )
+                .into_response();
             }
             warn!("describe_instances failed: {e}");
             return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {e}"))
@@ -595,7 +823,7 @@ pub async fn instance_details(
     let iam_role = instance
         .iam_instance_profile()
         .and_then(|p| p.arn())
-        .map(|arn| arn.split('/').last().unwrap_or(arn).to_string())
+        .map(|arn| arn.split('/').next_back().unwrap_or(arn).to_string())
         .unwrap_or_else(|| "N/A".into());
 
     let security_groups = instance
@@ -650,18 +878,18 @@ pub async fn instance_details(
 /// Retrieve and decrypt the Windows administrator password for a given EC2 instance.
 /// Args:
 ///  instance_id: ID of the EC2 instance to retrieve the password for
-///  pem_key: (optional) PEM-encoded RSA private key content to use for decryption. If not provided, 
+///  pem_key: (optional) PEM-encoded RSA private key content to use for decryption. If not provided,
 /// the function will attempt to locate the key file based on the key_name and configured ssh_key_folder in preferences.
-///  key_name: (optional) Name of the key pair associated with the instance. 
+///  key_name: (optional) Name of the key pair associated with the instance.
 /// This is used to locate the PEM key file if pem_key is not provided directly in the request.
 /// Returns:
-///  Decrypted administrator password as a string if successful, or an error response if the password is not available, 
+///  Decrypted administrator password as a string if successful, or an error response if the password is not available,
 /// decryption fails, or if there are issues with the provided key information.
-/// Note: This function first retrieves the encrypted password data from AWS using the GetPasswordData API. 
-/// If the password data is not yet available (e.g. instance is still initializing), it returns an error indicating that 
-/// the password is not ready. It then resolves the PEM key either from the request body or by looking up the key file 
-/// based on the provided key name and configured SSH key folders. Finally, it attempts to decrypt the password using 
-/// the RSA private key. If any step fails (e.g. invalid instance ID, password not available, key resolution failure, decryption error), 
+/// Note: This function first retrieves the encrypted password data from AWS using the GetPasswordData API.
+/// If the password data is not yet available (e.g. instance is still initializing), it returns an error indicating that
+/// the password is not ready. It then resolves the PEM key either from the request body or by looking up the key file
+/// based on the provided key name and configured SSH key folders. Finally, it attempts to decrypt the password using
+/// the RSA private key. If any step fails (e.g. invalid instance ID, password not available, key resolution failure, decryption error),
 /// it returns a structured error response with details about the failure.
 pub async fn windows_password(
     Path(instance_id): Path<String>,
@@ -677,28 +905,18 @@ pub async fn windows_password(
         .last_profile
         .clone()
         .unwrap_or_else(|| "default".into());
-    let fallback_region = std::env::var("AWS_REGION")
-        .ok()
-        .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
-        .unwrap_or_else(|| "us-east-1".to_string());
-
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .region(
-            RegionProviderChain::first_try(prefs.last_region.clone().map(Region::new))
-                .or_default_provider()
-                .or_else(Region::new(fallback_region)),
-        )
-        .retry_config(RetryConfig::standard())
-        .timeout_config(
+    let cfg = load_aws_config(
+        &profile,
+        region_chain(prefs.last_region.clone()),
+        Some(RetryConfig::standard()),
+        Some(
             TimeoutConfig::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .read_timeout(Duration::from_secs(20))
                 .build(),
-        )
-        .behavior_version(BehaviorVersion::latest())
-        .load()
-        .await;
+        ),
+    )
+    .await;
 
     let ec2_client = ec2::Client::new(&cfg);
     let resp = match ec2_client
@@ -728,7 +946,7 @@ pub async fn windows_password(
         ));
     }
 
-    let pem = match resolve_pem_key(&body, &prefs) {
+    let pem = match resolve_pem_key(&body, &prefs).await {
         Ok(k) => k,
         Err(e) => return Err(e),
     };
@@ -741,11 +959,12 @@ pub async fn windows_password(
     Ok(ok(serde_json::json!({ "password": password })))
 }
 
+/// Returns the current application version for the frontend and API consumers.
 pub async fn version() -> impl IntoResponse {
     Json(serde_json::json!({"version": env!("CARGO_PKG_VERSION")}))
 }
 
-/// Resolves the PEM key content either directly from the request body or by looking up the key file based 
+/// Resolves the PEM key content either directly from the request body or by looking up the key file based
 /// on the provided key name and configured SSH key folders.
 /// Args:
 ///   body: WindowsPasswordReq containing either pem_key or key_name
@@ -753,17 +972,17 @@ pub async fn version() -> impl IntoResponse {
 /// Returns:
 ///   PEM key content as a string if found, or an error response tuple if the key cannot be resolved.
 ///   The function first checks if the PEM key is provided directly in the request body. If not, it
-///   attempts to locate the key file based on the key_name and the configured ssh_key_folder(s). It supports 
-///   multiple folders separated by commas or newlines, and it tries several common filename patterns based on 
-///   the key_name. If the key file is found and read successfully, it returns the content. If it cannot find 
-///   the key or read it, it returns a structured error response indicating the issue and suggesting how to 
+///   attempts to locate the key file based on the key_name and the configured ssh_key_folder(s). It supports
+///   multiple folders separated by commas or newlines, and it tries several common filename patterns based on
+///   the key_name. If the key file is found and read successfully, it returns the content. If it cannot find
+///   the key or read it, it returns a structured error response indicating the issue and suggesting how to
 ///   configure the key properly.
-/// Note: This function is designed to be flexible in how it locates the PEM key, allowing users to either 
-/// provide the key directly or specify a key name that can be resolved against configured folders. It also 
-/// provides detailed error messages to help users troubleshoot issues with key configuration. In a real 
-/// implementation, you might want to add additional security checks (e.g. ensuring the key file has appropriate 
+/// Note: This function is designed to be flexible in how it locates the PEM key, allowing users to either
+/// provide the key directly or specify a key name that can be resolved against configured folders. It also
+/// provides detailed error messages to help users troubleshoot issues with key configuration. In a real
+/// implementation, you might want to add additional security checks (e.g. ensuring the key file has appropriate
 /// permissions) or support for different key formats if needed.
-fn resolve_pem_key(
+async fn resolve_pem_key(
     body: &WindowsPasswordReq,
     prefs: &crate::models::Preferences,
 ) -> Result<String, (StatusCode, Json<crate::models::ErrorResponse>)> {
@@ -786,7 +1005,7 @@ fn resolve_pem_key(
     })?;
 
     let folders = ssh_key_folder
-        .split(|c| c == ',' || c == '\n')
+        .split([',', '\n'])
         .filter_map(|s| {
             let trimmed = s.trim();
             if trimmed.is_empty() {
@@ -810,7 +1029,7 @@ fn resolve_pem_key(
     for folder in folders {
         for cand in &candidates {
             let path = folder.join(cand);
-            if let Ok(data) = std::fs::read_to_string(&path) {
+            if let Ok(data) = tokio::fs::read_to_string(&path).await {
                 return Ok(data);
             }
         }
@@ -827,19 +1046,19 @@ fn resolve_pem_key(
 ///   pem: PEM-encoded RSA private key as a string
 ///   encrypted_b64: Base64-encoded encrypted password string from AWS GetPasswordData API
 /// Returns:
-///   Decrypted password as a string if successful, or an error response tuple if decryption fails 
+///   Decrypted password as a string if successful, or an error response tuple if decryption fails
 /// (e.g. invalid key, invalid encrypted data, decryption error).
-/// Note: This function attempts to parse the provided PEM key using both PKCS1 and PKCS8 formats to maximize 
-/// compatibility with different key types. It also provides detailed error messages for various failure scenarios 
+/// Note: This function attempts to parse the provided PEM key using both PKCS1 and PKCS8 formats to maximize
+/// compatibility with different key types. It also provides detailed error messages for various failure scenarios
 /// to help diagnose issues
-/// with key parsing and decryption. The decryption is performed using RSA PKCS1v15 padding, which is the standard 
+/// with key parsing and decryption. The decryption is performed using RSA PKCS1v15 padding, which is the standard
 /// for AWS Windows password encryption.
-/// In a real implementation, you might want to add additional checks (e.g. key size, allowed formats) or 
+/// In a real implementation, you might want to add additional checks (e.g. key size, allowed formats) or
 /// support for other encryption schemes if AWS introduces changes in the future.
-/// The function is designed to be robust and provide clear error messages for common issues like invalid PEM format, 
+/// The function is designed to be robust and provide clear error messages for common issues like invalid PEM format,
 /// invalid base64 data, and decryption failures, which can help users troubleshoot problems with their key configuration.
 /// Raises:
-///   BadRequest: If the PEM key cannot be parsed, if the encrypted data is not valid base64, or if decryption fails. 
+///   BadRequest: If the PEM key cannot be parsed, if the encrypted data is not valid base64, or if decryption fails.
 /// The error message will include details about the failure to help diagnose issues with key configuration or data formatting.
 fn decrypt_password(
     pem: &str,
@@ -892,67 +1111,11 @@ fn decrypt_password(
 ///   Current time in seconds as an i64. If there is an error getting the system time (e.g. system clock is before UNIX epoch), it returns 0 to avoid panicking
 /// Note: This function is designed to be simple and robust, providing a consistent way to get the current time for cache management.
 /// Raises:
-///  None. This function handles any potential errors internally and returns a fallback value if it encounters issues 
+///  None. This function handles any potential errors internally and returns a fallback value if it encounters issues
 /// with system time retrieval, ensuring that it does not cause panics or crashes in the application.
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-/// Loads the instance cache from disk if it is currently empty in memory. This is used to populate the cache on server startup 
-/// or when the first request comes in, allowing us to persist cached instance data across restarts. 
-/// The function checks if the in-memory cache is empty, and if so, it attempts to read the cache file from disk 
-/// (using the path defined in Preferences). If the file exists and can be parsed successfully, it loads the cached instances into memory. 
-/// Any errors during file reading or parsing are logged but do not cause the function to fail, allowing the server to continue operating 
-/// even if the cache cannot be loaded.
-/// Note: This function is designed to be called at the beginning of the list_instances handler to ensure that we have cached data 
-/// available if it exists. In a real implementation, you might want to add additional checks (e.g. cache expiration) or 
-/// load the cache asynchronously on server startup to avoid blocking the first request.
-/// Args:
-///   state: Reference to the application state containing the instance cache and preferences
-/// Returns:
-///   None. The function updates the instance cache in the application state if it successfully loads data from disk. 
-/// If the cache is already populated in memory, it does nothing. Any errors during loading
-/// are logged but do not cause the function to return an error, allowing the server to continue operating without a cache if necessary.
-/// Raises:
-///   None. This function handles errors internally and logs them without propagating them to the caller.
-async fn load_cache_from_disk_if_needed(state: &AppState) {
-    let need_load = { state.instance_cache.lock().await.is_empty() };
-    if !need_load {
-        return;
-    }
-    let path = crate::models::Preferences::cache_path();
-    if let Ok(data) = fs::read_to_string(&path) {
-        match serde_json::from_str::<std::collections::HashMap<String, CachedInstances>>(&data) {
-            Ok(map) => {
-                *state.instance_cache.lock().await = map;
-                info!("Loaded instance cache from disk");
-            }
-            Err(e) => warn!("Failed to parse instance cache file: {e}"),
-        }
-    }
-}
-
-/// Saves the current instance cache to disk as a JSON file. This is used to persist cached instance data across server restarts. 
-/// The function takes a reference to the instance cache (a HashMap) and attempts to serialize it to a pretty-printed JSON string. 
-/// It then writes this string to the cache file path defined in Preferences. If any errors occur during serialization or file writing, 
-/// they are returned as a Result error, allowing the caller to log or handle the error as needed.
-/// Note: This function is designed to be called whenever the instance cache is updated (e.g. after fetching new data from AWS) 
-/// to ensure that the latest cache state is persisted to disk.
-/// Args:
-///   cache: Reference to the instance cache HashMap that should be saved to disk
-/// Returns:
-///   Ok(()) if the cache was successfully saved to disk, or an Err with details about the failure if serialization or 
-/// file writing fails. The error message will include details about what went wrong
-/// (e.g. serialization error, file write error) to help diagnose issues with cache persistence.
-/// Raises:
-///   IOError: If there is an error writing the cache file to disk (e.g. permission issues, disk full)
-///   SerializationError: If there is an error serializing the cache data to JSON (e.g. invalid data structure, serialization failure)
-fn save_cache_to_disk(cache: &std::collections::HashMap<String, CachedInstances>) -> Result<()> {
-    let path = crate::models::Preferences::cache_path();
-    let data = serde_json::to_string_pretty(cache)?;
-    fs::write(path, data)?;
-    Ok(())
 }

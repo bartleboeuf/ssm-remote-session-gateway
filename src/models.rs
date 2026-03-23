@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tracing::error;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct Preferences {
     pub port_range_start: u16,
     pub port_range_end: u16,
@@ -13,9 +14,12 @@ pub struct Preferences {
     pub ssh_key_folder: Option<String>,
     pub ssh_options: String,
     pub cache_ttl_secs: u64,
+    pub linux_username: String,
+    pub windows_username: String,
 }
 
 impl Default for Preferences {
+    /// Returns the built-in defaults for all preferences.
     fn default() -> Self {
         Self {
             port_range_start: 61000,
@@ -27,55 +31,72 @@ impl Default for Preferences {
             ssh_key_folder: None,
             ssh_options: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null".into(),
             cache_ttl_secs: 3600,
+            linux_username: "ec2-user".into(),
+            windows_username: "Administrator".into(),
         }
     }
 }
 
 impl Preferences {
+    /// Returns the platform-appropriate config directory.
+    fn project_dir() -> PathBuf {
+        directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
+            .map(|d| d.config_dir().to_path_buf())
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+    }
+
+    /// File path for the persisted preferences JSON.
     pub fn path() -> PathBuf {
-        let mut dir = directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
-            .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
-        let _ = std::fs::create_dir_all(&dir);
-        dir.push("preferences.json");
-        dir
+        Self::project_dir().join("preferences.json")
     }
 
+    /// Directory where log files should be stored.
     pub fn log_dir() -> PathBuf {
-        let dir = directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
-            .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
-        let _ = std::fs::create_dir_all(&dir);
-        dir
+        Self::project_dir()
     }
 
-    pub fn load() -> Self {
+    /// Reads the stored preferences file if it exists; otherwise returns defaults.
+    pub async fn load() -> Self {
         let path = Self::path();
-        if let Ok(data) = std::fs::read_to_string(path) {
-            if let Ok(p) = serde_json::from_str(&data) {
-                return p;
-            }
+        if let Ok(data) = tokio::fs::read_to_string(&path).await
+            && let Ok(p) = serde_json::from_str(&data)
+        {
+            return p;
         }
         Preferences::default()
     }
 
-    pub fn save(&self) {
+    /// Writes the current preferences to disk, creating the directory if needed.
+    pub async fn save(&self) {
         let path = Self::path();
-        if let Ok(data) = serde_json::to_string_pretty(self) {
-            if let Err(e) = std::fs::write(path, data) {
-                error!("failed to save preferences: {e}");
-            }
+        if let Some(parent) = path.parent()
+            && let Err(e) = tokio::fs::create_dir_all(parent).await
+        {
+            error!("failed to create preferences directory: {e}");
+            return;
+        }
+        if let Ok(data) = serde_json::to_string_pretty(self)
+            && let Err(e) = tokio::fs::write(path, data).await
+        {
+            error!("failed to save preferences: {e}");
         }
     }
 
+    /// File path for the cached instance metadata.
     pub fn cache_path() -> PathBuf {
-        let mut dir = directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
+        Self::project_cache_dir().join("instance_cache.json")
+    }
+
+    /// Returns the directory used for cache data (separate from config).
+    pub fn project_cache_dir() -> PathBuf {
+        directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
             .map(|d| d.cache_dir().to_path_buf())
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")));
-        let _ = std::fs::create_dir_all(&dir);
-        println!("Cache directory: {:?}", dir);
-        dir.push("instance_cache.json");
-        dir
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+    }
+
+    /// Creates the cache directory if it does not already exist.
+    pub async fn ensure_cache_dir() -> std::io::Result<()> {
+        tokio::fs::create_dir_all(Self::project_cache_dir()).await
     }
 }
 
@@ -118,6 +139,7 @@ pub struct ErrorResponse {
     pub error: String,
 }
 
+/// Wraps a payload in the standard success envelope used by the API.
 pub fn ok<T: Serialize>(payload: T) -> axum::Json<ApiResponse<T>> {
     axum::Json(ApiResponse {
         status: "success".into(),
@@ -125,6 +147,7 @@ pub fn ok<T: Serialize>(payload: T) -> axum::Json<ApiResponse<T>> {
     })
 }
 
+/// Builds a standardized error response tuple for Axum handlers.
 pub fn err(
     status: axum::http::StatusCode,
     msg: impl Into<String>,
@@ -184,6 +207,8 @@ pub struct PrefsInput {
     pub ssh_key_folder: Option<String>,
     pub ssh_options: Option<String>,
     pub cache_ttl_secs: Option<u64>,
+    pub linux_username: Option<String>,
+    pub windows_username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
