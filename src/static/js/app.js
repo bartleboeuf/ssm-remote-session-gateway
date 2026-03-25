@@ -54,8 +54,54 @@ const app = {
                         document.body.prepend(banner);
                         // Also add padding to body so content is not hidden behind the banner
                         document.body.style.paddingTop = `${banner.offsetHeight}px`;
+                        // Open installation page if session-manager-plugin is not installed
+                        if (!health.session_manager_plugin) {
+                            window.open('https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html', '_blank');
+                        }
+                    } else if (health.session_manager_plugin) {
+                        // Check for latest version on GitHub
+                        try {
+                            const tagsRes = await fetch('https://api.github.com/repos/aws/session-manager-plugin/tags');
+                            if (tagsRes.ok) {
+                                const tags = await tagsRes.json();
+                                if (Array.isArray(tags) && tags.length > 0) {
+                                    const latestVersion = tags[0].name;
+                                    const installedVersion = health.session_manager_plugin_version;
+                                    if (latestVersion && installedVersion && latestVersion !== installedVersion) {
+                                        const upgradeBanner = document.createElement('div');
+                                        upgradeBanner.id = 'upgradePluginBanner';
+                                        upgradeBanner.style.cssText = 'background:#f0ad4e;color:#fff;padding:10px 20px;text-align:center;font-weight:600;position:fixed;top:0;left:0;right:0;z-index:9999;';
+                                        upgradeBanner.innerHTML =
+                                            `⚠ A newer version of Session Manager Plugin is available ` +
+                                            `(installed: ${this.escape_html(installedVersion)}, latest: ${this.escape_html(latestVersion)}). ` +
+                                            `<a href="#" id="upgradePluginLink" style="color:#fff;text-decoration:underline;">Download update</a>` +
+                                            ` <button onclick="document.getElementById('upgradePluginBanner').remove();document.body.style.paddingTop='';" ` +
+                                            `style="background:none;border:none;color:#fff;margin-left:10px;cursor:pointer;font-size:1rem;">✕</button>`;
+                                        document.body.prepend(upgradeBanner);
+                                        document.body.style.paddingTop = `${upgradeBanner.offsetHeight}px`;
+                                        document.getElementById('upgradePluginLink').onclick = (e) => {
+                                            e.preventDefault();
+                                            window.open('https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html', '_blank');
+                                        };
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('Failed to check latest session-manager-plugin version:', e);
+                        }
                     }
                     if (!health.aws_credentials) app.show_toast('No AWS credentials detected. Configure your profile.', 'warning');
+                    // Initialize About button popover with session-manager-plugin version
+                    const aboutBtn = document.getElementById('aboutBtn');
+                    if (aboutBtn) {
+                        const smpVersion = health.session_manager_plugin_version || 'unknown';
+                        new bootstrap.Popover(aboutBtn, {
+                            content: `Session Manager Plugin: ${smpVersion}`,
+                            trigger: 'hover focus',
+                            placement: 'bottom',
+                            title: 'Version Info',
+                        });
+                    }
                     console.log('Health:', health);
                 }
             } catch (e) {
@@ -120,6 +166,22 @@ const app = {
             console.warn('Custom port modal element not found');
         }
 
+        // Initialize RDS port modal
+        const rdsPortModal = document.getElementById('rdsPortModal');
+        if (rdsPortModal) {
+            this.modals.rdsPort = new bootstrap.Modal(rdsPortModal);
+        } else {
+            console.warn('RDS port modal element not found');
+        }
+
+        // Initialize ECS port modal
+        const ecsPortModal = document.getElementById('ecsPortModal');
+        if (ecsPortModal) {
+            this.modals.ecsPort = new bootstrap.Modal(ecsPortModal);
+        } else {
+            console.warn('ECS port modal element not found');
+        }
+
         // Setup keyboard shortcuts
         this.setup_keyboard_shortcuts();
 
@@ -159,6 +221,65 @@ const app = {
             nameFilter.oninput = this.debounce(() => {
                 this.render_instances();
             }, 200);
+        }
+
+        // Resource type selector
+        const resourceTypeSelect = document.getElementById('resourceTypeSelect');
+        if (resourceTypeSelect) {
+            resourceTypeSelect.onchange = (e) => {
+                const type = e.target.value;
+                console.log(`[Resource Selector] Changed to: ${type}, Profile: ${this.current_profile}, Region: ${this.current_region}`);
+
+                document.querySelectorAll('.resource-section').forEach(s => s.classList.add('d-none'));
+                const sectionId = `${type}Section`;
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    section.classList.remove('d-none');
+                } else {
+                    console.error(`Section ${sectionId} not found`);
+                }
+
+                if (type === 'rds') {
+                    console.log('Loading RDS databases...');
+                    this.load_rds_databases();
+                } else if (type === 'ecs') {
+                    console.log('Loading ECS tasks...');
+                    this.load_ecs_tasks();
+                } else {
+                    console.log('Loading EC2 instances...');
+                    this.load_instances();
+                }
+            };
+        } else {
+            console.warn('resourceTypeSelect element not found');
+        }
+
+        // RDS filter (regex)
+        const rdsFilter = document.getElementById('rdsFilter');
+        if (rdsFilter) {
+            rdsFilter.oninput = this.debounce(() => {
+                this.render_rds_databases();
+            }, 200);
+        }
+
+        // ECS filter (regex)
+        const ecsFilter = document.getElementById('ecsFilter');
+        if (ecsFilter) {
+            ecsFilter.oninput = this.debounce(() => {
+                this.render_ecs_tasks();
+            }, 200);
+        }
+
+        // RDS port forwarding button
+        const startRdsPortForwardingBtn = document.getElementById('startRdsPortForwardingBtn');
+        if (startRdsPortForwardingBtn) {
+            startRdsPortForwardingBtn.onclick = () => this.start_rds_port_forwarding();
+        }
+
+        // ECS port forwarding button
+        const startEcsPortForwardingBtn = document.getElementById('startEcsPortForwardingBtn');
+        if (startEcsPortForwardingBtn) {
+            startEcsPortForwardingBtn.onclick = () => this.start_ecs_port_forwarding();
         }
 
         // Quit button
@@ -1664,8 +1785,378 @@ const app = {
         } catch (error) {
             console.error('Error checking connections:', error);
         }
-    }
+    },
 
+    // Load RDS databases
+    async load_rds_databases() {
+        const rdsLoadingState = document.getElementById('rdsLoadingState');
+        const rdsEmptyState = document.getElementById('rdsEmptyState');
+        try {
+            console.log('[RDS] Loading databases from /api/rds...');
+            if (rdsLoadingState) rdsLoadingState.classList.remove('d-none');
+            if (rdsEmptyState) rdsEmptyState.classList.add('d-none');
+
+            const response = await fetch('/api/rds');
+            console.log('[RDS] Response status:', response.status);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const databases = await response.json();
+            console.log('[RDS] Loaded databases:', databases);
+            this.rds_databases = databases;
+            this.render_rds_databases();
+
+            if (rdsLoadingState) rdsLoadingState.classList.add('d-none');
+        } catch (error) {
+            console.error('[RDS] Error loading RDS databases:', error);
+            this.show_error('Failed to load RDS databases: ' + error.message);
+            if (rdsLoadingState) rdsLoadingState.classList.add('d-none');
+        }
+    },
+
+    // Render RDS databases
+    render_rds_databases() {
+        const container = document.getElementById('rdsList');
+        const emptyState = document.getElementById('rdsEmptyState');
+        const countBadge = document.getElementById('rdsCount');
+        const filterInput = document.getElementById('rdsFilter');
+
+        if (!this.rds_databases || this.rds_databases.length === 0) {
+            container.innerHTML = '';
+            emptyState.classList.remove('d-none');
+            countBadge.textContent = '0 databases';
+            return;
+        }
+
+        emptyState.classList.add('d-none');
+
+        const filterValue = filterInput?.value || '';
+        let filtered = this.rds_databases;
+
+        if (filterValue) {
+            try {
+                const regex = new RegExp(filterValue, 'i');
+                filtered = this.rds_databases.filter(db => regex.test(db.db_instance_identifier));
+            } catch (e) {
+                console.warn('Invalid regex filter:', e);
+            }
+        }
+
+        container.innerHTML = filtered.map(db => `
+            <div class="col-md-12">
+                <div class="card instance-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <div>
+                                <h6 class="mb-1">${this.escape_html(db.db_instance_identifier)}</h6>
+                                <small class="text-muted">Engine: ${this.escape_html(db.engine.toUpperCase())}</small>
+                            </div>
+                            <span class="badge ${db.status === 'available' ? 'bg-success' : 'bg-warning'}">${this.escape_html(db.status)}</span>
+                        </div>
+                        <div class="instance-info-grid mb-3">
+                            <div class="info-item">
+                                <span class="info-label">Endpoint</span>
+                                <span class="info-value text-break">${this.escape_html(db.endpoint)}</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center gap-2">
+                                <span><span class="info-label">Port</span> <span class="info-value">${db.port}</span></span>
+                                <button class="btn btn-primary btn-sm" onclick="app.show_rds_port_modal({
+                                    db_instance_identifier: '${db.db_instance_identifier}',
+                                    endpoint: '${db.endpoint}',
+                                    port: ${db.port},
+                                    engine: '${db.engine}'
+                                })" title="Set up port forwarding">
+                                    <i class="bi bi-arrow-left-right me-1"></i> Port Forward
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        countBadge.textContent = `${filtered.length} database${filtered.length !== 1 ? 's' : ''}`;
+    },
+
+    // Show RDS port modal
+    show_rds_port_modal(db) {
+        this.current_rds_db = db;
+        document.getElementById('rdsEndpoint').value = db.endpoint;
+        document.getElementById('rdsRemotePort').value = db.port;
+        document.getElementById('rdsLocalPort').value = '';
+
+        // Populate EC2 instances with SSM support
+        const instanceSelect = document.getElementById('rdsInstanceSelect');
+        instanceSelect.innerHTML = '<option value="">Select an EC2 instance...</option>';
+
+        if (this.instances && this.instances.length > 0) {
+            const ssmInstances = this.instances.filter(i => i.has_ssm);
+            if (ssmInstances.length > 0) {
+                ssmInstances.forEach(instance => {
+                    const option = document.createElement('option');
+                    option.value = instance.id;
+                    option.textContent = `${instance.name || instance.id} (${instance.id})`;
+                    instanceSelect.appendChild(option);
+                });
+            } else {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'No instances with SSM support available';
+                option.disabled = true;
+                instanceSelect.appendChild(option);
+            }
+        }
+
+        // Set preset buttons
+        const isMysql = db.engine.toLowerCase().includes('mysql');
+        const isPostgres = db.engine.toLowerCase().includes('postgres');
+        const isAurora = db.engine.toLowerCase().includes('aurora');
+
+        document.getElementById('portMysql').onclick = () => {
+            document.getElementById('rdsRemotePort').value = '3306';
+        };
+        document.getElementById('portPostgres').onclick = () => {
+            document.getElementById('rdsRemotePort').value = '5432';
+        };
+        document.getElementById('portAurora').onclick = () => {
+            document.getElementById('rdsRemotePort').value = '3306';
+        };
+
+        this.modals.rdsPort.show();
+    },
+
+    // Load ECS tasks
+    async load_ecs_tasks() {
+        const ecsLoadingState = document.getElementById('ecsLoadingState');
+        const ecsEmptyState = document.getElementById('ecsEmptyState');
+        try {
+            console.log('[ECS] Loading tasks from /api/ecs...');
+            if (ecsLoadingState) ecsLoadingState.classList.remove('d-none');
+            if (ecsEmptyState) ecsEmptyState.classList.add('d-none');
+
+            const response = await fetch('/api/ecs');
+            console.log('[ECS] Response status:', response.status);
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP ${response.status}: ${errorText}`);
+            }
+
+            const tasks = await response.json();
+            console.log('[ECS] Loaded tasks:', tasks);
+            this.ecs_tasks = tasks;
+            this.render_ecs_tasks();
+
+            if (ecsLoadingState) ecsLoadingState.classList.add('d-none');
+        } catch (error) {
+            console.error('[ECS] Error loading ECS tasks:', error);
+            this.show_error('Failed to load ECS tasks: ' + error.message);
+            if (ecsLoadingState) ecsLoadingState.classList.add('d-none');
+        }
+    },
+
+    // Render ECS tasks
+    render_ecs_tasks() {
+        const container = document.getElementById('ecsList');
+        const emptyState = document.getElementById('ecsEmptyState');
+        const countBadge = document.getElementById('ecsCount');
+        const filterInput = document.getElementById('ecsFilter');
+
+        if (!this.ecs_tasks || this.ecs_tasks.length === 0) {
+            container.innerHTML = '';
+            emptyState.classList.remove('d-none');
+            countBadge.textContent = '0 tasks';
+            return;
+        }
+
+        emptyState.classList.add('d-none');
+
+        const filterValue = filterInput?.value || '';
+        let filtered = this.ecs_tasks;
+
+        if (filterValue) {
+            try {
+                const regex = new RegExp(filterValue, 'i');
+                filtered = this.ecs_tasks.filter(t => regex.test(t.task_arn));
+            } catch (e) {
+                console.warn('Invalid regex filter:', e);
+            }
+        }
+
+        container.innerHTML = filtered.map(task => `
+            <div class="col-md-12">
+                <div class="card instance-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start mb-3">
+                            <div>
+                                <h6 class="mb-1">${this.escape_html(task.task_arn.split('/').pop())}</h6>
+                                <small class="text-muted">Cluster: ${this.escape_html(task.cluster_name)}</small>
+                            </div>
+                            <span class="badge ${task.status === 'RUNNING' ? 'bg-success' : 'bg-warning'}">${this.escape_html(task.status)}</span>
+                        </div>
+                        <div class="instance-info-grid mb-3">
+                            <div class="info-item">
+                                <span class="info-label">Task Definition</span>
+                                <span class="info-value text-break">${this.escape_html(task.task_definition)}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Launch Type</span>
+                                <span class="info-value">${this.escape_html(task.launch_type)}</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Container</span>
+                                <span class="info-value">${this.escape_html(task.container_name)}</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="app.show_ecs_port_modal({
+                            task_arn: '${task.task_arn}',
+                            container_name: '${task.container_name}',
+                            cluster_name: '${task.cluster_name}'
+                        })">
+                            <i class="bi bi-arrow-left-right me-1"></i> Port Forward
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+
+        countBadge.textContent = `${filtered.length} task${filtered.length !== 1 ? 's' : ''}`;
+    },
+
+    // Show ECS port modal
+    show_ecs_port_modal(task) {
+        this.current_ecs_task = task;
+        document.getElementById('ecsTaskArn').value = task.task_arn;
+        document.getElementById('ecsRemotePort').value = '80';
+        document.getElementById('ecsLocalPort').value = '';
+
+        // Populate EC2 instances with SSM support
+        const instanceSelect = document.getElementById('ecsInstanceSelect');
+        instanceSelect.innerHTML = '<option value="">Select an EC2 instance...</option>';
+
+        if (this.instances && this.instances.length > 0) {
+            const ssmInstances = this.instances.filter(i => i.has_ssm);
+            if (ssmInstances.length > 0) {
+                ssmInstances.forEach(instance => {
+                    const option = document.createElement('option');
+                    option.value = instance.id;
+                    option.textContent = `${instance.name || instance.id} (${instance.id})`;
+                    instanceSelect.appendChild(option);
+                });
+            } else {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'No instances with SSM support available';
+                option.disabled = true;
+                instanceSelect.appendChild(option);
+            }
+        }
+
+        this.modals.ecsPort.show();
+    },
+
+    // Start RDS port forwarding
+    async start_rds_port_forwarding() {
+        if (!this.current_rds_db) {
+            this.show_error('No RDS database selected');
+            return;
+        }
+
+        const instanceId = document.getElementById('rdsInstanceSelect').value;
+        if (!instanceId) {
+            this.show_error('Please select an EC2 instance to route through');
+            return;
+        }
+
+        const remotePort = parseInt(document.getElementById('rdsRemotePort').value);
+        const localPort = document.getElementById('rdsLocalPort').value ? parseInt(document.getElementById('rdsLocalPort').value) : null;
+
+        if (!remotePort || remotePort < 1 || remotePort > 65535) {
+            this.show_error('Invalid remote port');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/custom-port/${instanceId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    remote_port: remotePort,
+                    local_port: localPort || null,
+                    remote_host: this.current_rds_db.endpoint
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to start port forwarding');
+            }
+
+            const connection = await response.json();
+            connection.instanceId = this.current_rds_db.db_instance_identifier;
+            this.connections.push(connection);
+            this.render_connections();
+            this.update_counters();
+            this.modals.rdsPort.hide();
+            this.show_toast(`RDS port forwarding started on localhost:${connection.local_port}`, 'success');
+        } catch (error) {
+            console.error('Error starting RDS port forwarding:', error);
+            this.show_error('Failed to start RDS port forwarding: ' + error.message);
+        }
+    },
+
+    // Start ECS port forwarding
+    async start_ecs_port_forwarding() {
+        if (!this.current_ecs_task) {
+            this.show_error('No ECS task selected');
+            return;
+        }
+
+        const instanceId = document.getElementById('ecsInstanceSelect').value;
+        if (!instanceId) {
+            this.show_error('Please select an EC2 instance to route through');
+            return;
+        }
+
+        const remotePort = parseInt(document.getElementById('ecsRemotePort').value);
+        const localPort = document.getElementById('ecsLocalPort').value ? parseInt(document.getElementById('ecsLocalPort').value) : null;
+
+        if (!remotePort || remotePort < 1 || remotePort > 65535) {
+            this.show_error('Invalid remote port');
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/custom-port/${instanceId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    remote_port: remotePort,
+                    local_port: localPort || null,
+                    remote_host: this.current_ecs_task.task_arn
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to start port forwarding');
+            }
+
+            const connection = await response.json();
+            connection.instanceId = this.current_ecs_task.task_arn;
+            this.connections.push(connection);
+            this.render_connections();
+            this.update_counters();
+            this.modals.ecsPort.hide();
+            this.show_toast(`ECS port forwarding started on localhost:${connection.local_port}`, 'success');
+        } catch (error) {
+            console.error('Error starting ECS port forwarding:', error);
+            this.show_error('Failed to start ECS port forwarding: ' + error.message);
+        }
+    }
 
 };
 

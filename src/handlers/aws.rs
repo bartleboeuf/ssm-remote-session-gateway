@@ -6,7 +6,9 @@ use aws_config::timeout::TimeoutConfig;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_sdk_ec2 as ec2;
 use aws_sdk_ec2::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_ecs as ecs;
 use aws_sdk_iam as iam;
+use aws_sdk_rds as rds;
 use aws_sdk_ssm as ssm;
 use aws_sdk_sts as sts;
 use aws_types::region::Region;
@@ -31,7 +33,8 @@ use tokio::task::JoinSet;
 use which::which;
 
 use crate::models::{
-    CachedInstances, ConnectRequest, ErrorResponse, InstanceItem, WindowsPasswordReq, ok,
+    CachedEcsTasks, CachedInstances, CachedRdsInstances, ConnectRequest, EcsTask, ErrorResponse,
+    InstanceItem, RdsInstance, WindowsPasswordReq, ok,
 };
 use crate::state::AppState;
 use axum::extract::State;
@@ -279,15 +282,31 @@ pub async fn is_aws_configured() -> bool {
 /// errors. Any issues with AWS session manager plugin, or credentials will be reflected in the boolean
 /// values of the response, allowing the frontend to provide appropriate guidance to the user.
 pub async fn health() -> impl IntoResponse {
+    let smp_installed = which("session-manager-plugin").is_ok();
+    let smp_version = if smp_installed {
+        match tokio::process::Command::new("session-manager-plugin")
+            .arg("--version")
+            .output()
+            .await
+        {
+            Ok(output) => {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if s.is_empty() {
+                    String::from_utf8_lossy(&output.stderr).trim().to_string()
+                } else {
+                    s
+                }
+            }
+            Err(_) => "unknown".to_string(),
+        }
+    } else {
+        "not installed".to_string()
+    };
+
     Json(serde_json::json!({
-        "aws_cli": match which("aws") {
-            Ok(_path) => true,
-            Err(_e) => false,
-        },
-        "session_manager_plugin": match which("session-manager-plugin") {
-            Ok(_path) => true,
-            Err(_e) => false,
-        },
+        "aws_cli": which("aws").is_ok(),
+        "session_manager_plugin": smp_installed,
+        "session_manager_plugin_version": smp_version,
         "aws_credentials": is_aws_configured().await,
         "os": std::env::consts::OS,
         "version": env!("CARGO_PKG_VERSION"),
@@ -311,7 +330,8 @@ pub async fn health() -> impl IntoResponse {
 pub async fn list_profiles() -> impl IntoResponse {
     info!("list_profiles called");
     let mut profiles = std::collections::BTreeSet::new();
-    if let Some(home) = dirs::home_dir() {
+    if let Some(user_dirs) = directories::UserDirs::new() {
+        let home = user_dirs.home_dir();
         for fname in [".aws/credentials", ".aws/config"] {
             let path = home.join(fname);
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
@@ -576,9 +596,7 @@ pub async fn list_instances(
         .last_profile
         .clone()
         .unwrap_or_else(|| "default".into());
-    let region_provider = region_chain(prefs
-        .last_region
-        .clone());
+    let region_provider = region_chain(prefs.last_region.clone());
     let resolved_region = region_provider
         .region()
         .await
@@ -1011,7 +1029,8 @@ async fn resolve_pem_key(
             if trimmed.is_empty() {
                 None
             } else if trimmed.starts_with('~') {
-                dirs::home_dir().map(|h| h.join(trimmed.trim_start_matches('~')))
+                directories::UserDirs::new()
+                    .map(|u| u.home_dir().join(trimmed.trim_start_matches('~')))
             } else {
                 Some(std::path::PathBuf::from(trimmed))
             }
@@ -1118,4 +1137,300 @@ fn now_secs() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// List RDS database instances in the current region with caching and coordination.
+/// Uses the same cache pattern as EC2 instances to prevent duplicate AWS API calls.
+pub async fn list_rds_databases(State(state): State<AppState>) -> impl IntoResponse {
+    info!("list_rds_databases called");
+
+    let prefs = state.prefs.read().await.clone();
+    let profile = prefs
+        .last_profile
+        .clone()
+        .unwrap_or_else(|| "default".into());
+    let region_provider = region_chain(prefs.last_region.clone());
+    let resolved_region = region_provider
+        .region()
+        .await
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "us-east-1".to_string());
+    let cache_key = format!("{}|{}", profile, resolved_region);
+    let ttl = prefs.cache_ttl_secs as i64;
+
+    // Check cache first
+    if let Some(cached) = {
+        let cache = state.rds_cache.lock().await;
+        cache.get(&cache_key).cloned()
+    } {
+        let now = now_secs();
+        if now - cached.fetched_at <= ttl {
+            info!("list_rds_databases cache hit for {}", cache_key);
+            return Json(cached.entries).into_response();
+        }
+    }
+
+    // Register refresh slot
+    let slot = {
+        let mut refreshes = state.rds_refreshes.lock().await;
+        if let Some(existing) = refreshes.get(&cache_key) {
+            (false, existing.clone())
+        } else {
+            let notify = Arc::new(Notify::new());
+            refreshes.insert(cache_key.clone(), notify.clone());
+            (true, notify)
+        }
+    };
+
+    if !slot.0 {
+        // Not leader, wait for refresh
+        slot.1.notified().await;
+        if let Some(cached) = {
+            let cache = state.rds_cache.lock().await;
+            cache.get(&cache_key).cloned()
+        } {
+            let now = now_secs();
+            if now - cached.fetched_at <= ttl {
+                return Json(cached.entries).into_response();
+            }
+        }
+    }
+
+    // Leader: fetch from AWS
+    info!("list_rds_databases fetching from AWS for {}", cache_key);
+
+    let cfg = load_aws_config(
+        &profile,
+        region_chain(prefs.last_region.clone()),
+        Some(RetryConfig::standard().with_max_attempts(3)),
+        Some(
+            TimeoutConfig::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(Duration::from_secs(30))
+                .build(),
+        ),
+    )
+    .await;
+
+    let client = rds::Client::new(&cfg);
+    match client.describe_db_instances().send().await {
+        Ok(resp) => {
+            let mut entries = Vec::new();
+            for db in resp.db_instances() {
+                if let Some(db_id) = db.db_instance_identifier() {
+                    let endpoint = db
+                        .endpoint()
+                        .and_then(|e| e.address())
+                        .unwrap_or("")
+                        .to_string();
+                    let port = db.endpoint().and_then(|e| e.port()).unwrap_or(3306) as u16;
+                    let engine = db.engine().unwrap_or("unknown").to_string();
+                    let status = db.db_instance_status().unwrap_or("unknown").to_string();
+
+                    entries.push(RdsInstance {
+                        db_instance_identifier: db_id.to_string(),
+                        endpoint,
+                        port,
+                        engine,
+                        status,
+                    });
+                }
+            }
+
+            let cached = CachedRdsInstances {
+                fetched_at: now_secs(),
+                entries: entries.clone(),
+            };
+
+            let mut cache = state.rds_cache.lock().await;
+            cache.insert(cache_key.clone(), cached);
+            drop(cache);
+
+            let mut refreshes = state.rds_refreshes.lock().await;
+            refreshes.remove(&cache_key);
+            drop(refreshes);
+
+            info!("list_rds_databases success: {} databases", entries.len());
+            Json(entries).into_response()
+        }
+        Err(e) => {
+            warn!("list_rds_databases failed: {e}");
+            let mut refreshes = state.rds_refreshes.lock().await;
+            refreshes.remove(&cache_key);
+            drop(refreshes);
+
+            crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response()
+        }
+    }
+}
+
+/// List ECS tasks in the current region with caching and coordination.
+/// Uses the same cache pattern as EC2 instances to prevent duplicate AWS API calls.
+pub async fn list_ecs_tasks(State(state): State<AppState>) -> impl IntoResponse {
+    info!("list_ecs_tasks called");
+
+    let prefs = state.prefs.read().await.clone();
+    let profile = prefs
+        .last_profile
+        .clone()
+        .unwrap_or_else(|| "default".into());
+    let region_provider = region_chain(prefs.last_region.clone());
+    let resolved_region = region_provider
+        .region()
+        .await
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "us-east-1".to_string());
+    let cache_key = format!("{}|{}", profile, resolved_region);
+    let ttl = prefs.cache_ttl_secs as i64;
+
+    // Check cache first
+    if let Some(cached) = {
+        let cache = state.ecs_cache.lock().await;
+        cache.get(&cache_key).cloned()
+    } {
+        let now = now_secs();
+        if now - cached.fetched_at <= ttl {
+            info!("list_ecs_tasks cache hit for {}", cache_key);
+            return Json(cached.entries).into_response();
+        }
+    }
+
+    // Register refresh slot
+    let slot = {
+        let mut refreshes = state.ecs_refreshes.lock().await;
+        if let Some(existing) = refreshes.get(&cache_key) {
+            (false, existing.clone())
+        } else {
+            let notify = Arc::new(Notify::new());
+            refreshes.insert(cache_key.clone(), notify.clone());
+            (true, notify)
+        }
+    };
+
+    if !slot.0 {
+        // Not leader, wait for refresh
+        slot.1.notified().await;
+        if let Some(cached) = {
+            let cache = state.ecs_cache.lock().await;
+            cache.get(&cache_key).cloned()
+        } {
+            let now = now_secs();
+            if now - cached.fetched_at <= ttl {
+                return Json(cached.entries).into_response();
+            }
+        }
+    }
+
+    // Leader: fetch from AWS
+    info!("list_ecs_tasks fetching from AWS for {}", cache_key);
+
+    let cfg = load_aws_config(
+        &profile,
+        region_chain(prefs.last_region.clone()),
+        Some(RetryConfig::standard().with_max_attempts(3)),
+        Some(
+            TimeoutConfig::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .read_timeout(Duration::from_secs(30))
+                .build(),
+        ),
+    )
+    .await;
+
+    let ecs_client = ecs::Client::new(&cfg);
+    let mut entries = Vec::new();
+
+    // List clusters first
+    match ecs_client.list_clusters().send().await {
+        Ok(clusters_resp) => {
+            for cluster_arn in clusters_resp.cluster_arns() {
+                let cluster_name = cluster_arn
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(cluster_arn)
+                    .to_string();
+
+                // List tasks in this cluster
+                if let Ok(tasks_resp) = ecs_client
+                    .list_tasks()
+                    .cluster(cluster_arn)
+                    .desired_status(ecs::types::DesiredStatus::Running)
+                    .send()
+                    .await
+                {
+                    for task_arn in tasks_resp.task_arns() {
+                        // Describe task to get details
+                        if let Ok(describe_resp) = ecs_client
+                            .describe_tasks()
+                            .cluster(cluster_arn)
+                            .tasks(task_arn)
+                            .send()
+                            .await
+                        {
+                            for task in describe_resp.tasks() {
+                                if let Some(task_def) = task.task_definition_arn() {
+                                    let task_def_name = task_def
+                                        .split('/')
+                                        .nth_back(1)
+                                        .unwrap_or("unknown")
+                                        .to_string();
+
+                                    let container_name = task
+                                        .containers()
+                                        .first()
+                                        .and_then(|c| c.name())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+
+                                    let launch_type = task
+                                        .launch_type()
+                                        .map(|lt| format!("{:?}", lt))
+                                        .unwrap_or_else(|| "EC2".to_string());
+
+                                    let status = task
+                                        .last_status()
+                                        .map(|s| format!("{:?}", s))
+                                        .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                                    entries.push(EcsTask {
+                                        task_arn: task_arn.to_string(),
+                                        task_definition: task_def_name,
+                                        container_name,
+                                        launch_type,
+                                        status,
+                                        cluster_name: cluster_name.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            warn!("list_ecs_tasks failed to list clusters: {e}");
+            let mut refreshes = state.ecs_refreshes.lock().await;
+            refreshes.remove(&cache_key);
+            drop(refreshes);
+
+            return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e))
+                .into_response();
+        }
+    }
+
+    let cached = CachedEcsTasks {
+        fetched_at: now_secs(),
+        entries: entries.clone(),
+    };
+
+    let mut cache = state.ecs_cache.lock().await;
+    cache.insert(cache_key.clone(), cached);
+    drop(cache);
+
+    let mut refreshes = state.ecs_refreshes.lock().await;
+    refreshes.remove(&cache_key);
+    drop(refreshes);
+
+    info!("list_ecs_tasks success: {} tasks", entries.len());
+    Json(entries).into_response()
 }

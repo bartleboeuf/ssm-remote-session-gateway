@@ -64,6 +64,10 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         connections: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         instance_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         instance_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        rds_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        rds_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        ecs_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        ecs_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         shutdown_tx: shutdown_tx.clone(),
     };
 
@@ -94,6 +98,8 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         .route("/regions", get(aws::list_regions))
         .route("/connect", post(aws::connect))
         .route("/instances", get(aws::list_instances))
+        .route("/rds", get(aws::list_rds_databases))
+        .route("/ecs", get(aws::list_ecs_tasks))
         .route("/ssh/{instance_id}", post(connections::ssh))
         .route("/rdp/{instance_id}", post(connections::rdp))
         .route("/custom-port/{instance_id}", post(connections::custom_port))

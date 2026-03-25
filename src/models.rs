@@ -42,7 +42,11 @@ impl Preferences {
     fn project_dir() -> PathBuf {
         directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
             .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+            .unwrap_or_else(|| {
+                directories::UserDirs::new()
+                    .map(|d| d.home_dir().to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            })
     }
 
     /// File path for the persisted preferences JSON.
@@ -91,7 +95,11 @@ impl Preferences {
     pub fn project_cache_dir() -> PathBuf {
         directories::ProjectDirs::from("", "", "ssm-remote-session-gateway")
             .map(|d| d.cache_dir().to_path_buf())
-            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+            .unwrap_or_else(|| {
+                directories::UserDirs::new()
+                    .map(|d| d.home_dir().to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            })
     }
 
     /// Creates the cache directory if it does not already exist.
@@ -118,6 +126,37 @@ pub struct ConnectionInfo {
 pub struct ManagedConnection {
     pub info: ConnectionInfo,
     pub child: Option<tokio::process::Child>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RdsInstance {
+    pub db_instance_identifier: String,
+    pub endpoint: String,
+    pub port: u16,
+    pub engine: String,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CachedRdsInstances {
+    pub fetched_at: i64,
+    pub entries: Vec<RdsInstance>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EcsTask {
+    pub task_arn: String,
+    pub task_definition: String,
+    pub container_name: String,
+    pub launch_type: String,
+    pub status: String,
+    pub cluster_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CachedEcsTasks {
+    pub fetched_at: i64,
+    pub entries: Vec<EcsTask>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

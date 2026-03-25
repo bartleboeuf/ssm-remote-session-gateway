@@ -73,6 +73,16 @@
                         <span id="regionHelp" class="visually-hidden">Choose your AWS region</span>
                     </div>
 
+                    <!-- Resource Type Selection -->
+                    <div class="d-flex align-items-center gap-2">
+                        <label for="resourceTypeSelect" class="visually-hidden">Resource Type</label>
+                        <select id="resourceTypeSelect" class="form-select toolbar-select" aria-label="Select resource type">
+                            <option value="ec2" selected>EC2 Instances</option>
+                            <option value="rds">RDS Databases</option>
+                            <!-- <option value="ecs">ECS Tasks</option> -->
+                        </select>
+                    </div>
+
                     <!-- Connect Button -->
                     <button id="connectBtn" class="btn btn-success d-flex align-items-center gap-2"
                         aria-label="Connect to AWS" data-bs-toggle="tooltip" data-bs-placement="bottom"
@@ -116,8 +126,7 @@
 
                     <!-- About Button -->
                     <button id="aboutBtn" class="btn btn-outline-secondary d-flex align-items-center gap-2"
-                        aria-label="About SSM Remote Session Gateway" data-bs-toggle="tooltip"
-                        data-bs-placement="bottom" title="About">
+                        aria-label="About SSM Remote Session Gateway">
                         <i class="bi bi-info-circle-fill fs-5" aria-hidden="true"></i>
                         <span>About</span>
                     </button>
@@ -133,6 +142,8 @@
 
         <!-- Main Content -->
         <main id="main-content">
+            <!-- EC2 Section -->
+            <div id="ec2Section" class="resource-section">
             <div class="row">
                 <!-- Instances Section -->
                 <section class="col-md-8" aria-labelledby="instancesHeading">
@@ -234,6 +245,154 @@
                     </div>
                 </aside>
             </div>
+            </div>
+            <!-- /EC2 Section -->
+
+            <!-- RDS Section -->
+            <div id="rdsSection" class="resource-section d-none">
+            <div class="row">
+                <!-- RDS Databases Section -->
+                <section class="col-md-8" aria-labelledby="rdsHeading">
+                    <div class="card shadow-sm mb-4 mb-md-0">
+                        <div class="card-header border-bottom py-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div class="d-flex align-items-center gap-2">
+                                    <h5 class="m-0" id="rdsHeading">RDS Databases</h5>
+                                </div>
+                                <span class="badge bg-primary" id="rdsCount" aria-live="polite"
+                                    aria-atomic="true">0 databases</span>
+                            </div>
+                            <!-- Filter Box -->
+                            <div class="filter-box mt-2">
+                                <div>
+                                    <label for="rdsFilter" class="visually-hidden">Filter databases by name</label>
+                                    <input type="text" id="rdsFilter" class="form-control"
+                                        placeholder="🔍 Filter by name (regex supported)"
+                                        aria-label="Filter databases by name" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="rdsEmptyState" class="text-center text-muted p-4 d-none" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-database d-block mb-3" aria-hidden="true"></i>
+                                <p class="mb-0">No RDS databases found. Connect to AWS to view databases.</p>
+                            </div>
+                            <!-- Loading State -->
+                            <div id="rdsLoadingState" class="text-center p-4 d-none" role="status"
+                                aria-live="polite">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading databases...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Loading databases...</p>
+                            </div>
+                            <!-- RDS List -->
+                            <div id="rdsList" class="row g-4" role="list" aria-label="RDS databases">
+                                <!-- Databases will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Active Connections Section (shared) -->
+                <aside class="col-md-4" aria-labelledby="connectionsHeading">
+                    <div class="card shadow-sm">
+                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
+                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
+                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
+                                active</span>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
+                                <p class="mt-2 mb-0">No active connections</p>
+                            </div>
+                            <!-- Connections List -->
+                            <div id="connectionsList" role="list" aria-label="Active connections">
+                                <!-- Active connections will be shown here -->
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+            </div>
+            <!-- /RDS Section -->
+
+            <!-- ECS Section -->
+            <div id="ecsSection" class="resource-section d-none">
+            <div class="row">
+                <!-- ECS Tasks Section -->
+                <section class="col-md-8" aria-labelledby="ecsHeading">
+                    <div class="card shadow-sm mb-4 mb-md-0">
+                        <div class="card-header border-bottom py-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <div class="d-flex align-items-center gap-2">
+                                    <h5 class="m-0" id="ecsHeading">ECS Tasks</h5>
+                                </div>
+                                <span class="badge bg-primary" id="ecsCount" aria-live="polite"
+                                    aria-atomic="true">0 tasks</span>
+                            </div>
+                            <!-- Filter Box -->
+                            <div class="filter-box mt-2">
+                                <div>
+                                    <label for="ecsFilter" class="visually-hidden">Filter tasks by name</label>
+                                    <input type="text" id="ecsFilter" class="form-control"
+                                        placeholder="🔍 Filter by name (regex supported)"
+                                        aria-label="Filter tasks by name" />
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="ecsEmptyState" class="text-center text-muted p-4 d-none" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-box d-block mb-3" aria-hidden="true"></i>
+                                <p class="mb-0">No ECS tasks found. Connect to AWS to view tasks.</p>
+                            </div>
+                            <!-- Loading State -->
+                            <div id="ecsLoadingState" class="text-center p-4 d-none" role="status"
+                                aria-live="polite">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading tasks...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Loading tasks...</p>
+                            </div>
+                            <!-- ECS List -->
+                            <div id="ecsList" class="row g-4" role="list" aria-label="ECS tasks">
+                                <!-- Tasks will be loaded here -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Active Connections Section (shared) -->
+                <aside class="col-md-4" aria-labelledby="connectionsHeading">
+                    <div class="card shadow-sm">
+                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
+                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
+                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
+                                active</span>
+                        </div>
+                        <div class="card-body">
+                            <!-- Empty State -->
+                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
+                                aria-live="polite">
+                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
+                                <p class="mt-2 mb-0">No active connections</p>
+                            </div>
+                            <!-- Connections List -->
+                            <div id="connectionsList" role="list" aria-label="Active connections">
+                                <!-- Active connections will be shown here -->
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+            </div>
+            <!-- /ECS Section -->
         </main>
     </div>
 
@@ -298,6 +457,117 @@
         </div>
     </div>
 
+    <!-- RDS Port Forwarding Modal -->
+    <div class="modal fade" id="rdsPortModal" tabindex="-1" aria-labelledby="rdsPortModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="rdsPortModalLabel">Connect to RDS Database</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="rdsPortForm" novalidate>
+                        <div class="mb-3">
+                            <label for="rdsInstanceSelect" class="form-label">EC2 Instance to Route Through</label>
+                            <select class="form-select" id="rdsInstanceSelect" required aria-describedby="rdsInstanceHelp">
+                                <option value="">Select an EC2 instance...</option>
+                            </select>
+                            <div id="rdsInstanceHelp" class="form-text">RDS port forwarding requires an EC2 instance with SSM support to route the connection through</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Database Endpoint</label>
+                            <input type="text" class="form-control" id="rdsEndpoint" readonly>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Database Port</label>
+                            <div class="btn-group w-100 mb-2" role="group" aria-label="Database port presets">
+                                <button type="button" class="btn btn-outline-primary btn-sm" id="portMysql" data-port="3306">MySQL (3306)</button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" id="portPostgres" data-port="5432">PostgreSQL (5432)</button>
+                                <button type="button" class="btn btn-outline-primary btn-sm" id="portAurora" data-port="3306">Aurora (3306)</button>
+                            </div>
+                            <input type="number" class="form-control" id="rdsRemotePort" min="1" max="65535" value="3306"
+                                required aria-describedby="rdsPortHelp">
+                            <div id="rdsPortHelp" class="form-text">Port number on the RDS instance (1-65535)</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="rdsLocalPort" class="form-label">Local Port <span
+                                    class="text-muted">(optional)</span></label>
+                            <input type="number" class="form-control" id="rdsLocalPort" min="1" max="65535"
+                                aria-describedby="rdsLocalPortHelp">
+                            <div id="rdsLocalPortHelp" class="form-text">Local port to forward to (1-65535). If not
+                                specified, will use a port from the configured range.</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="startRdsPortForwardingBtn">
+                        <span class="spinner-border spinner-border-sm d-none me-2" role="status"
+                            aria-hidden="true"></span>
+                        Start Forwarding
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ECS Port Forwarding Modal -->
+    <div class="modal fade" id="ecsPortModal" tabindex="-1" aria-labelledby="ecsPortModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="ecsPortModalLabel">Connect to ECS Task</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="ecsPortForm" novalidate>
+                        <div class="mb-3">
+                            <label for="ecsInstanceSelect" class="form-label">EC2 Instance to Route Through</label>
+                            <select class="form-select" id="ecsInstanceSelect" required aria-describedby="ecsInstanceHelp">
+                                <option value="">Select an EC2 instance...</option>
+                            </select>
+                            <div id="ecsInstanceHelp" class="form-text">ECS port forwarding requires an EC2 instance with SSM support to route the connection through</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label">Task ARN</label>
+                            <input type="text" class="form-control" id="ecsTaskArn" readonly>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="ecsRemotePort" class="form-label">Remote Port</label>
+                            <input type="number" class="form-control" id="ecsRemotePort" min="1" max="65535" value="80"
+                                required aria-describedby="ecsRemotePortHelp">
+                            <div id="ecsRemotePortHelp" class="form-text">Port number on the ECS task (1-65535)</div>
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="ecsLocalPort" class="form-label">Local Port <span
+                                    class="text-muted">(optional)</span></label>
+                            <input type="number" class="form-control" id="ecsLocalPort" min="1" max="65535"
+                                aria-describedby="ecsLocalPortHelp">
+                            <div id="ecsLocalPortHelp" class="form-text">Local port to forward to (1-65535). If not
+                                specified, will use a port from the configured range.</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="startEcsPortForwardingBtn">
+                        <span class="spinner-border spinner-border-sm d-none me-2" role="status"
+                            aria-hidden="true"></span>
+                        Start Forwarding
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- About Modal -->
     <div class="modal fade" id="aboutModal" tabindex="-1" aria-labelledby="aboutModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-lg">
@@ -319,8 +589,7 @@
                         <p class="text-muted mb-3" id="appVersion">Version <span id="versionNumber">Loading...</span>
                         </p>
                         <p class="lead">
-                            Cross-platform application to manage EC2 instances and establish secure connections via AWS
-                            Systems Manager (SSM).
+                            Cross-platform application to manage secure connections to EC2 instances and RDS databases via AWS Systems Manager (SSM).
                         </p>
                     </div>
 
@@ -358,6 +627,11 @@
                                         class="bi bi-gear-fill me-1"></i>Configurable</span>
                                 <span class="info-value">Customizable port ranges & folder preferences.</span>
                             </div>
+                            <div class="info-item">
+                                <span class="info-label text-warning"><i
+                                        class="bi bi-database me-1"></i>RDS Support</span>
+                                <span class="info-value">Connect to RDS databases via EC2 port forwarding.</span>
+                            </div>
                         </div>
                     </div>
 
@@ -367,7 +641,7 @@
                         <h6 class="mb-3"><i class="bi bi-info-circle-fill text-info me-2"></i>About</h6>
                         <p>
                             SSM Remote Session Gateway is a cross-platform web application that simplifies managing EC2
-                            instances
+                            instances / RDS databases
                             and establishing secure connections through AWS Systems Manager Session Manager. This
                             project
                             is maintained and continuously improved based on real-world usage and feedback.

@@ -10,7 +10,7 @@
 
 ## 🚀 Overview
 
-SSM Remote Session Gateway simplifies access to EC2 instances without opening SSH ports or managing VPNs. The backend is now a Rust/Axum server that serves the existing static frontend and `/api/*` endpoints.
+SSM Remote Session Gateway simplifies access to EC2 instances and RDS databases without opening SSH ports or managing VPNs. The backend is now a Rust/Axum server that serves the existing static frontend and `/api/*` endpoints.
 
 ### Why SSM Remote Session Gateway?
 
@@ -38,8 +38,11 @@ SSM Remote Session Gateway simplifies access to EC2 instances without opening SS
 - **🔌 Custom Port Forwarding**  
   Forward any port through SSM tunnels with flexible port selection and automatic port management
 
-- **📊 Instance Management**  
+- **📊 Instance Management**
   View, filter, and manage EC2 instances with real-time status updates, OS/state filters, and comprehensive instance details
+
+- **🗄️ RDS Database Support**
+  Connect to RDS databases (MySQL, PostgreSQL, Aurora, etc.) via EC2 port forwarding with automatic database discovery and routing
 
 - **🔑 Multi-Directory SSH Keys**  
   Support for multiple SSH key directories with automatic key lookup and path resolution
@@ -83,6 +86,7 @@ The user/role running this gateway needs the following permissions:
 
 - **SSM**: `ssm:StartSession`, `ssm:DescribeInstanceInformation`, `ssm:TerminateSession`
 - **EC2**: `ec2:DescribeInstances`, `ec2:DescribeRegions`, `ec2:GetPasswordData`
+- **RDS**: `rds:DescribeDBInstances` (optional, for RDS database discovery)
 - **STS**: `sts:GetCallerIdentity` (to identify account ID)
 - **IAM**: `iam:ListAccountAliases` (optional, to display account name)
 
@@ -155,12 +159,13 @@ Binary: `target/release/ssm-remote-session-gateway`.
    - Select your AWS profile from the dropdown
    - Choose the AWS region
    - Click "Connect"
-   - View your EC2 instances in the list
+   - View your EC2 instances and RDS databases in the lists
 
 2. **Start a Connection**
-   - **SSH**: Click the "SSH" button on an instance card
-   - **RDP**: Click the "RDP" button (Windows instances only)
+   - **SSH**: Click the "SSH" button on an EC2 instance card
+   - **RDP**: Click the "RDP" button on Windows EC2 instances
    - **Custom Port**: Click the "Port" button and specify remote/local ports
+   - **RDS Database**: Click the "Connect" button on a database and select an EC2 instance to route through
 
 3. **Manage Connections**
    - View active connections in the sidebar
@@ -181,6 +186,7 @@ Supports **regular expressions** for advanced filtering.
 
 #### Port Selection
 - **SSH/RDP**: Automatically uses the same local port as remote port (22 for SSH, 3389 for RDP)
+- **RDS**: Automatically detects the database port (3306 for MySQL/Aurora, 5432 for PostgreSQL, etc.)
 - **Custom Ports**: Uses the same local port if available, otherwise falls back to configured range
 - **Port Range**: Configurable in Preferences with a default of 61000-61100.
 

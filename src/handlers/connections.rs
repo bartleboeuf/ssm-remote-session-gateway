@@ -17,7 +17,6 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ec2 as ec2;
 use aws_sdk_ssm as ssm;
 use aws_types::region::Region;
-use dirs;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 use tokio::time;
@@ -364,7 +363,8 @@ fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
                 continue;
             }
             let path = if trimmed.starts_with('~') {
-                dirs::home_dir().map(|h| h.join(trimmed.trim_start_matches('~')))
+                directories::UserDirs::new()
+                    .map(|u| u.home_dir().join(trimmed.trim_start_matches('~')))
             } else {
                 Some(std::path::PathBuf::from(trimmed))
             };
@@ -374,8 +374,8 @@ fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
         }
     }
     // fallback ~/.ssh
-    if let Some(home) = dirs::home_dir() {
-        dirs.push(home.join(".ssh"));
+    if let Some(user_dirs) = directories::UserDirs::new() {
+        dirs.push(user_dirs.home_dir().join(".ssh"));
     }
 
     let candidates = [
@@ -598,8 +598,8 @@ pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
                 "key_path": mc.info.key_path,
                 "connection_info": connection_info,
             })
-    })
-    .collect();
+        })
+        .collect();
     Json(vals)
 }
 
