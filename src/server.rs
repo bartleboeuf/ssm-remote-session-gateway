@@ -57,7 +57,7 @@ async fn cleanup_connections(state: &AppState) {
 ///   IOError: If there is an error reading the TLS certificate or key files from disk, or if there is an error binding to the specified address for the server to listen on.
 ///   TLSConfiguration Error: If there is an error generating a self-signed certificate or configuring the TLS settings for the server.
 ///   ServerRuntimeError: If there is an unhandled error during request processing or if there is an issue with the server's runtime environment that causes it to fail during operation.
-pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
+pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<()> {
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let state = AppState {
         prefs: Arc::new(tokio::sync::RwLock::new(initial_prefs)),
@@ -90,6 +90,8 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         .allow_origin([
             "https://127.0.0.1:5000".parse::<HeaderValue>().unwrap(),
             "https://localhost:5000".parse().unwrap(),
+            "http://127.0.0.1:5000".parse().unwrap(),
+            "http://localhost:5000".parse().unwrap(),
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE]);
 
@@ -103,6 +105,7 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         .route("/ssh/{instance_id}", post(connections::ssh))
         .route("/rdp/{instance_id}", post(connections::rdp))
         .route("/custom-port/{instance_id}", post(connections::custom_port))
+        .route("/execute-ssh", post(connections::execute_ssh_command))
         .route(
             "/terminate-connection/{conn_id}",
             post(connections::terminate),
@@ -170,11 +173,16 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         .with_state(state.clone());
 
     let addr: std::net::SocketAddr = "127.0.0.1:5000".parse().unwrap();
-    let url = format!("https://{addr}");
+    let protocol = if use_https { "https" } else { "http" };
+    let url = format!("{protocol}://{addr}");
     info!("Starting server on {url}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    let tls_acceptor = TlsAcceptor::from(Arc::new(load_tls_config()?));
+    let tls_acceptor = if use_https {
+        Some(TlsAcceptor::from(Arc::new(load_tls_config()?)))
+    } else {
+        None
+    };
     let mut conn_builder = Builder::new(TokioExecutor::new());
     conn_builder
         .http1()
@@ -199,20 +207,27 @@ pub async fn run(initial_prefs: Preferences) -> anyhow::Result<()> {
         tokio::select! {
             res = listener.accept() => {
                 let (stream, _) = res?;
-                let tls_acceptor = tls_acceptor.clone();
                 let svc = TowerToHyperService::new(app.clone());
                 let builder = conn_builder.clone();
+                let tls_acceptor = tls_acceptor.clone();
                 tokio::spawn(async move {
-                    let tls_stream = match tls_acceptor.accept(stream).await {
-                        Ok(s) => s,
-                        Err(err) => {
-                            tracing::error!("TLS handshake error: {err}");
-                            return;
+                    if let Some(tls_acceptor) = tls_acceptor {
+                        match tls_acceptor.accept(stream).await {
+                            Ok(s) => {
+                                let io = TokioIo::new(s);
+                                if let Err(err) = builder.serve_connection(io, svc).await {
+                                    tracing::error!("HTTP connection error: {err}");
+                                }
+                            }
+                            Err(err) => {
+                                tracing::error!("TLS handshake error: {err}");
+                            }
                         }
-                    };
-                    let io = TokioIo::new(tls_stream);
-                    if let Err(err) = builder.serve_connection(io, svc).await {
-                        tracing::error!("HTTP connection error: {err}");
+                    } else {
+                        let io = TokioIo::new(stream);
+                        if let Err(err) = builder.serve_connection(io, svc).await {
+                            tracing::error!("HTTP connection error: {err}");
+                        }
                     }
                 });
             },
@@ -291,6 +306,11 @@ fn ensure_self_signed_cert(cert_path: &str, key_path: &str) -> anyhow::Result<()
         .subject_alt_names
         .push(SanType::IpAddress(std::net::IpAddr::V4(
             std::net::Ipv4Addr::new(127, 0, 0, 1),
+        )));
+    params
+        .subject_alt_names
+        .push(SanType::IpAddress(std::net::IpAddr::V6(
+            std::net::Ipv6Addr::LOCALHOST,
         )));
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "ssm-remote-session-gateway");

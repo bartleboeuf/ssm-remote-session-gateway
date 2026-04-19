@@ -348,6 +348,29 @@ const app = {
 
         // Setup SSH key folders management
         this.setup_ssh_key_folders();
+        this.setup_sidebar_positioning();
+    },
+
+    // Setup sidebar positioning to align with main content section
+    setup_sidebar_positioning() {
+        const calculateSidebarPosition = () => {
+            const mainContent = document.getElementById('main-content');
+            const sidebar = document.getElementById('connectionsPanel');
+
+            if (mainContent && sidebar) {
+                // Get the viewport position of where the main content section starts
+                const rect = mainContent.getBoundingClientRect();
+                const sidebarTop = rect.top;
+                document.documentElement.style.setProperty('--sidebar-top', `${sidebarTop}px`);
+                console.log(`[Sidebar] Positioned at top: ${sidebarTop}px (aligned with main content section)`);
+            }
+        };
+
+        // Calculate on init
+        setTimeout(calculateSidebarPosition, 100);
+
+        // Recalculate on window resize
+        window.addEventListener('resize', calculateSidebarPosition);
     },
 
 
@@ -745,23 +768,29 @@ const app = {
                     }
                 }
 
-                // Refresh active connections when profile changes
-                if (typeof this.render_connections === 'function') {
-                    this.render_connections();
-                    this.update_counters();
+                // Force disconnect when profile changes
+                if (this.is_connected) {
+                    await this.disconnect();
+                } else {
+                    // Clear lists even when not connected
+                    this.rds_databases = [];
+                    this.ecs_tasks = [];
+                    this.render_rds_databases();
+                    this.render_ecs_tasks();
                 }
             });
 
-            // Refresh active connections when region changes
+            // Force disconnect when region changes
             this.elements.regionSelect.addEventListener('change', async () => {
                 if (this.is_connected) {
                     await this.disconnect();
                     await this.toggle_connection();
                 } else {
-                    if (typeof this.render_connections === 'function') {
-                        this.render_connections();
-                        this.update_counters();
-                    }
+                    // Clear lists even when not connected
+                    this.rds_databases = [];
+                    this.ecs_tasks = [];
+                    this.render_rds_databases();
+                    this.render_ecs_tasks();
                 }
             });
 
@@ -884,12 +913,16 @@ const app = {
         this.aws_account_alias = null; // Clear account alias
         this.instances = [];
         this.connections = [];
+        this.rds_databases = [];
+        this.ecs_tasks = [];
 
         this.update_aws_account_display();
         this.elements.connectBtn.innerHTML = '<i class="bi bi-plug"></i> Connect';
         this.elements.connectBtn.classList.replace('btn-danger', 'btn-success');
         this.elements.instancesList.innerHTML = '';
         this.elements.connectionsList.innerHTML = '';
+        this.render_rds_databases();
+        this.render_ecs_tasks();
         this.update_counters();
 
         if (this.auto_refresh_interval) {
@@ -1380,6 +1413,27 @@ const app = {
         }
     },
 
+    async execute_ssh_command(command) {
+        try {
+            this.show_loading();
+            const response = await fetch('/api/execute-ssh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command })
+            });
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to launch SSH command');
+            }
+            this.show_success('SSH command launched in your local terminal');
+        } catch (error) {
+            console.error('Error launching SSH command:', error);
+            this.show_error('Failed to launch SSH command: ' + error.message);
+        } finally {
+            this.hide_loading();
+        }
+    },
+
     // Load PEM key and decrypt Windows password
     load_pem_key_and_decrypt(instanceId, passwordElementId, pemInputId) {
         const pemInput = document.getElementById(pemInputId);
@@ -1604,13 +1658,8 @@ const app = {
             return;
         }
 
-        const selectedProfile = this.elements.profileSelect.value;
-        const selectedRegion = this.elements.regionSelect.value;
-
-        const visibleConnections = this.connections.filter(c =>
-            (!selectedProfile || c.profile === selectedProfile) &&
-            (!selectedRegion || c.region === selectedRegion)
-        );
+        // Show all connections regardless of selected profile/region
+        const visibleConnections = this.connections;
 
         if (visibleConnections.length === 0) {
             // Show empty state
@@ -1665,11 +1714,11 @@ const app = {
     <div class="d-flex justify-content-between align-items-start">
         <div>
             <div class="d-flex align-items-center gap-2">
-                <span class="badge 
-                                ${this.get_connection_type_color(conn.type) === 'dark' ? 'bg-dark' : ''} 
-                                ${this.get_connection_type_color(conn.type) === 'primary' ? 'bg-primary' : ''}"
-                    style="${this.get_connection_type_color(conn.type) === '#800080' ? `background-color: #800080;` : ''}">
-                    ${conn.type}
+                <span class="badge
+                                ${conn.isRds ? '' : (this.get_connection_type_color(conn.type) === 'dark' ? 'bg-dark' : '')}
+                                ${conn.isRds ? '' : (this.get_connection_type_color(conn.type) === 'primary' ? 'bg-primary' : '')}"
+                    style="${conn.isRds ? `background-color: #9d7ce8;` : (this.get_connection_type_color(conn.type) === '#9d7ce8' ? `background-color: #9d7ce8;` : '')}">
+                    ${conn.isRds ? 'RDS' : conn.type}
                 </span>
             </div>
             <div class="text-muted small"><b>ID: ${this.get_instance_name(conn.instanceId)}</b></div>
@@ -1693,7 +1742,7 @@ const app = {
         const colors = {
             'SSH': 'dark',
             'RDP': 'primary',
-            'Custom Port': '#800080'
+            'Custom Port': '#9d7ce8'
         };
         return colors[type] || 'secondary';
     },
@@ -2096,7 +2145,15 @@ const app = {
             }
 
             const connection = await response.json();
+            connection.id = connection.connection_id || connection.id;  // Normalize ID field
+            connection.type = 'Custom Port';  // RDS uses custom port forwarding
+            connection.localPort = connection.local_port;  // Map snake_case to camelCase
+            connection.remotePort = connection.remote_port;
+            connection.connectionInfo = connection.connection_info || null;
+            connection.timestamp = new Date().toISOString();
             connection.instanceId = this.current_rds_db.db_instance_identifier;
+            connection.remoteHost = this.current_rds_db.endpoint;
+            connection.isRds = true;
             this.connections.push(connection);
             this.render_connections();
             this.update_counters();
@@ -2146,6 +2203,12 @@ const app = {
             }
 
             const connection = await response.json();
+            connection.id = connection.connection_id || connection.id;  // Normalize ID field
+            connection.type = 'Custom Port';  // ECS uses custom port forwarding
+            connection.localPort = connection.local_port;  // Map snake_case to camelCase
+            connection.remotePort = connection.remote_port;
+            connection.connectionInfo = connection.connection_info || null;
+            connection.timestamp = new Date().toISOString();
             connection.instanceId = this.current_ecs_task.task_arn;
             this.connections.push(connection);
             this.render_connections();
@@ -2596,13 +2659,8 @@ app.render_connections = function () {
         return;
     }
 
-    const selectedProfile = this.elements.profileSelect.value;
-    const selectedRegion = this.elements.regionSelect.value;
-
-    const visibleConnections = this.connections.filter(c =>
-        (!selectedProfile || c.profile === selectedProfile) &&
-        (!selectedRegion || c.region === selectedRegion)
-    );
+    // Show all connections regardless of selected profile/region
+    const visibleConnections = this.connections;
 
     if (visibleConnections.length === 0) {
         if (emptyState) emptyState.classList.remove('d-none');
@@ -2704,10 +2762,10 @@ app.render_connections = function () {
                             <div class="text-muted small mb-1"><strong>SSH Command:</strong></div>
                             <div class="bg-dark text-light p-2 rounded font-monospace small" style="word-break: break-all; cursor: pointer;" 
                                  id="${sshCommandId}"
-                                 onclick="app.copy_text('${escapedSshCommand}')" 
-                                 title="Click to copy">
+                                 onclick="app.execute_ssh_command('${escapedSshCommand}')" 
+                                 title="Click to open a terminal and run this SSH command">
                                 <code class="text-light">${sshCommand}</code>
-                                <i class="bi bi-clipboard ms-2"></i>
+                                <i class="bi bi-play-circle ms-2"></i>
                             </div>
                         </li>
                     `;
@@ -2796,9 +2854,9 @@ app.render_connections = function () {
             <div class="d-flex justify-content-between align-items-start">
                 <div class="flex-grow-1">
                     <div class="d-flex align-items-center gap-2">
-                        <span class="badge ${this.get_connection_type_color(conn.type) === 'dark' ? 'bg-dark' : ''} ${this.get_connection_type_color(conn.type) === 'primary' ? 'bg-primary' : ''}" 
-                              style="${this.get_connection_type_color(conn.type) === '#800080' ? `background-color: #800080;` : ''}">
-                            ${conn.type}
+                        <span class="badge ${conn.isRds ? '' : (this.get_connection_type_color(conn.type) === 'dark' ? 'bg-dark' : '')} ${conn.isRds ? '' : (this.get_connection_type_color(conn.type) === 'primary' ? 'bg-primary' : '')}"
+                              style="${conn.isRds ? `background-color: #9d7ce8;` : (this.get_connection_type_color(conn.type) === '#9d7ce8' ? `background-color: #9d7ce8;` : '')}">
+                            ${conn.isRds ? 'RDS' : conn.type}
                         </span>
                     </div>
                     <div class="text-muted small"><b>ID: ${this.get_instance_name(conn.instanceId)}</b></div>
@@ -2822,8 +2880,8 @@ app.get_connection_type_color = function (type) {
     const colors = {
         'SSH': 'dark',
         'RDP': 'primary',
-        'Custom Port': '#800080',
-        'Remote Host Port': '#800080'
+        'Custom Port': '#9d7ce8',
+        'Remote Host Port': '#9d7ce8'
     };
     return colors[type] || 'secondary';
 };
@@ -2872,7 +2930,7 @@ app.start_connection_monitoring = function () {
             activeConnections.forEach(backendConn => {
                 const connId = backendConn.connection_id || backendConn.id;
                 if (!localIds.has(connId)) {
-                    this.connections.push({
+                    const connObj = {
                         id: connId,
                         instanceId: backendConn.instance_id,
                         localPort: backendConn.local_port,
@@ -2885,7 +2943,12 @@ app.start_connection_monitoring = function () {
                         region: backendConn.region,
                         timestamp: new Date().toISOString(),
                         connectionInfo: backendConn.connection_info
-                    });
+                    };
+                    // Mark RDS connections (they have remote_host)
+                    if (backendConn.remote_host) {
+                        connObj.isRds = true;
+                    }
+                    this.connections.push(connObj);
                     needsUpdate = true;
                 } else {
                     // Update profile/region if missing in local

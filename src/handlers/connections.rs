@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
@@ -310,6 +311,139 @@ fn build_connection_info(args: ConnectionInfoArgs) -> serde_json::Value {
             "port": local_port.to_string()
         }),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecuteSshRequest {
+    pub command: String,
+    pub connection_id: Option<uuid::Uuid>,
+}
+
+fn escape_single_quotes_for_bash(input: &str) -> String {
+    input.replace("'", "'\\''")
+}
+
+fn launch_ssh_in_terminal(
+    command: &str,
+) -> Result<(), (StatusCode, Json<crate::models::ErrorResponse>)> {
+    if command.trim().is_empty() {
+        return Err(err(StatusCode::BAD_REQUEST, "SSH command is empty"));
+    }
+    if !command.trim_start().starts_with("ssh") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "Only SSH commands may be executed from the web UI",
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let escaped = command.replace('"', "\\\"");
+        let apple_script = format!("tell application \"Terminal\" to do script \"{}\"", escaped);
+        Command::new("osascript")
+            .arg("-e")
+            .arg(apple_script)
+            .spawn()
+            .map_err(|e| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to launch Terminal: {e}"),
+                )
+            })?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let pwsh_command = format!("& {{ {} }}", command.replace('"', "\\\""));
+        let launcher = if which("wt.exe").is_ok() {
+            let mut cmd = Command::new("wt.exe");
+            cmd.args([
+                "new-tab",
+                "powershell.exe",
+                "-NoExit",
+                "-Command",
+                &pwsh_command,
+            ]);
+            cmd
+        } else {
+            let mut cmd = Command::new("cmd");
+            cmd.args([
+                "/C",
+                "start",
+                "",
+                "powershell.exe",
+                "-NoExit",
+                "-Command",
+                &pwsh_command,
+            ]);
+            cmd
+        };
+        launcher.spawn().map_err(|e| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to launch Windows terminal: {e}"),
+            )
+        })?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let bash_command = format!("{}; exec bash", escape_single_quotes_for_bash(command));
+        let terminals = [
+            (
+                "x-terminal-emulator",
+                vec!["-e", "bash", "-lc", bash_command.as_str()],
+            ),
+            (
+                "gnome-terminal",
+                vec!["--", "bash", "-lc", bash_command.as_str()],
+            ),
+            ("konsole", vec!["-e", "bash", "-lc", bash_command.as_str()]),
+            (
+                "alacritty",
+                vec!["-e", "bash", "-lc", bash_command.as_str()],
+            ),
+            (
+                "terminator",
+                vec!["-x", "bash", "-lc", bash_command.as_str()],
+            ),
+            (
+                "lxterminal",
+                vec!["-e", "bash", "-lc", bash_command.as_str()],
+            ),
+            ("xterm", vec!["-e", "bash", "-lc", bash_command.as_str()]),
+        ];
+
+        for (terminal, args) in terminals.iter() {
+            if which(terminal).is_ok() {
+                let mut cmd = Command::new(terminal);
+                cmd.args(args);
+                if cmd.spawn().is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+
+        Err(err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "No supported terminal emulator was found. Install a terminal emulator like gnome-terminal, xterm, alacritty, or configure a launcher in preferences.",
+        ))
+    }
+}
+
+pub async fn execute_ssh_command(
+    Json(req): Json<ExecuteSshRequest>,
+) -> Result<
+    Json<crate::models::ApiResponse<serde_json::Value>>,
+    (StatusCode, Json<crate::models::ErrorResponse>),
+> {
+    launch_ssh_in_terminal(&req.command)?;
+    Ok(ok(serde_json::json!({
+        "message": "SSH command launched in local terminal",
+        "connection_id": req.connection_id,
+    })))
 }
 
 /// Retrieves the key pair name attached to the given EC2 instance via DescribeInstances.

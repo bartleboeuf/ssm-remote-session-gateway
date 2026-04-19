@@ -22,6 +22,8 @@ async fn main() -> anyhow::Result<()> {
             .with_env_filter(EnvFilter::from_default_env())
             .try_init();
     }
-    tracing::info!("Logging initialized; starting server");
-    server::run(prefs).await
+
+    let use_https = std::env::args().any(|arg| arg == "--https" || arg == "--tls");
+    tracing::info!("Logging initialized; starting server (https={})", use_https);
+    server::run(prefs, use_https).await
 }

@@ -80,6 +80,41 @@ body {
     line-height: 1.6;
     letter-spacing: 0.01em;
     min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Toolbar sticky at top */
+nav[role="toolbar"] {
+    position: sticky;
+    top: 0;
+    z-index: 1020;
+    flex-shrink: 0;
+}
+
+/* Compact toolbar styling */
+.toolbar-body {
+    padding: 0.5rem 0.75rem !important;
+}
+
+nav[role="toolbar"] .toolbar-select,
+nav[role="toolbar"] .form-select,
+nav[role="toolbar"] .form-control {
+    height: 32px;
+    font-size: 0.875rem;
+    padding: 0.375rem 0.75rem;
+}
+
+nav[role="toolbar"] .btn {
+    padding: 0.375rem 0.75rem;
+    min-height: 32px;
+    font-size: 0.875rem;
+}
+
+nav[role="toolbar"] .btn-sm {
+    padding: 0.25rem 0.5rem;
+    min-height: 28px;
+    font-size: 0.8rem;
 }
 
 h1,
@@ -947,4 +982,225 @@ body {
 /* Fix for nested grid in modals */
 .modal-body .instance-info-grid {
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+/* ============================================
+   ABOUT MODAL - COMPACT RESPONSIVE
+   ============================================ */
+
+.modal-body-compact {
+    padding: var(--spacing-lg) !important;
+    max-height: 80vh;
+}
+
+.modal-dialog-scrollable .modal-body {
+    overflow-y: auto;
+}
+
+/* Compact feature grid */
+.instance-info-grid-compact {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: var(--spacing-sm);
+    margin-bottom: 0;
+}
+
+.info-item-compact {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: var(--spacing-sm);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-hover);
+    border: 1px solid var(--color-border);
+}
+
+.info-label-compact {
+    font-weight: 600;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.info-label-compact i {
+    font-size: 0.9rem;
+}
+
+.info-value-compact {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    line-height: 1.2;
+}
+
+/* Responsive About modal */
+@media (max-width: 576px) {
+    .modal-dialog-scrollable {
+        max-width: 100%;
+    }
+
+    .modal-body-compact {
+        padding: var(--spacing-md) !important;
+    }
+
+    .instance-info-grid-compact {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .info-item-compact {
+        padding: var(--spacing-xs) var(--spacing-sm);
+    }
+
+    .modal-body-compact h5 {
+        font-size: 1rem;
+    }
+
+    .modal-body-compact .small {
+        font-size: 0.75rem !important;
+    }
+}
+
+/* ============================================
+   FIXED SIDEBAR - ACTIVE CONNECTIONS
+   ============================================ */
+
+/* Main content wrapper - account for fixed sidebar on desktop */
+.main-content-with-sidebar {
+    padding-right: 0;
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* Resource sections with scrollable content */
+.resource-section {
+    display: flex;
+    flex-direction: column;
+    margin-right: 460px;
+}
+
+.resource-section .card {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    max-height: calc(100vh - var(--sidebar-top, 200px));
+}
+
+.resource-section .card-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--color-bg-card);
+    flex-shrink: 0;
+}
+
+.resource-section .card-body {
+    overflow-y: auto;
+    flex: 1;
+    scroll-behavior: smooth;
+}
+
+/* Fixed Connections Sidebar - aligned with instances panel, below toolbar */
+#connectionsPanel.connections-sidebar {
+    position: fixed;
+    right: var(--spacing-lg);
+    left: auto;
+    top: var(--sidebar-top, 200px);
+    width: 420px;
+    max-width: calc(100vw - 2 * var(--spacing-lg) - 450px);
+    height: calc(100vh - var(--sidebar-top, 200px) - var(--spacing-lg));
+    overflow-y: auto;
+    overflow-x: hidden;
+    z-index: 1010;
+    background: var(--color-bg-card);
+    margin: 0;
+    margin-left: var(--spacing-lg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    scroll-behavior: smooth;
+}
+
+/* Sidebar scrollbar styling */
+#connectionsPanel.connections-sidebar::-webkit-scrollbar {
+    width: 8px;
+}
+
+#connectionsPanel.connections-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+#connectionsPanel.connections-sidebar::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 4px;
+}
+
+#connectionsPanel.connections-sidebar::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-secondary);
+}
+
+/* Adjust main content to avoid overlap with fixed sidebar */
+.container-fluid {
+    margin-right: 0;
+}
+
+/* Mobile: Remove sidebar right margin on smaller screens */
+@media (max-width: 1200px) {
+    .resource-section {
+        margin-right: 0;
+    }
+}
+
+/* Connection items in fixed sidebar */
+.connection-item {
+    padding: var(--spacing-md);
+    border-bottom: 1px solid var(--color-border-warm);
+    border-radius: 0;
+    transition: background-color var(--transition-base);
+}
+
+.connection-item:last-child {
+    border-bottom: none;
+}
+
+.connection-item:hover {
+    background-color: var(--color-bg-hover);
+}
+
+/* Mobile: Responsive sidebar behavior */
+@media (max-width: 991px) {
+    #connectionsPanel.connections-sidebar {
+        position: relative;
+        width: 100%;
+        height: auto;
+        top: auto;
+        right: auto;
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-sm);
+        margin-top: var(--spacing-lg);
+    }
+
+    .resource-section {
+        margin-right: 0;
+    }
+
+    .container-fluid {
+        margin-right: 0;
+    }
+}
+
+/* Extra small screens: hide sidebar initially or make it collapsible */
+@media (max-width: 576px) {
+    #connectionsPanel.connections-sidebar {
+        margin-top: var(--spacing-md);
+        border-radius: var(--radius-md);
+    }
+
+    .connection-item {
+        padding: var(--spacing-md) var(--spacing-sm);
+    }
+
+    #connectionsPanel.connections-sidebar .card-header {
+        padding: var(--spacing-md) var(--spacing-md);
+    }
 }

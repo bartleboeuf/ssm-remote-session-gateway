@@ -40,14 +40,14 @@
 
     <div class="container-fluid py-4">
         <!-- Toolbar Navigation -->
-        <nav class="card shadow-sm mb-4" role="toolbar" aria-label="Main toolbar">
-            <div class="card-body">
-                <div class="d-flex flex-wrap align-items-center gap-3 toolbar-container">
+        <nav class="card shadow-sm mb-3" role="toolbar" aria-label="Main toolbar">
+            <div class="card-body toolbar-body">
+                <div class="d-flex flex-wrap align-items-center gap-2 toolbar-container">
                     <!-- Logo -->
-                    <div class="d-flex align-items-center me-auto">
+                    <div class="d-flex align-items-center me-auto" style="min-width: 0;">
                         <img src="/static/images/logo.png" alt="SSM Remote Session Gateway"
-                            style="max-height: 100px; width: auto;" class="me-2">
-                        <span class="fw-bold text-primary d-none d-md-inline">SSM Remote Session Gateway</span>
+                            style="max-height: 80px; width: auto;" class="me-2">
+                        <span class="fw-bold text-primary d-none d-md-inline small">SSM Remote Session Gateway</span>
                     </div>
                     <!-- Profile Selection -->
                     <div class="d-flex align-items-center gap-2">
@@ -141,12 +141,12 @@
         </div>
 
         <!-- Main Content -->
-        <main id="main-content">
+        <main id="main-content" class="main-content-with-sidebar">
             <!-- EC2 Section -->
             <div id="ec2Section" class="resource-section">
             <div class="row">
                 <!-- Instances Section -->
-                <section class="col-md-8" aria-labelledby="instancesHeading">
+                <section class="col-12" aria-labelledby="instancesHeading">
                     <div class="card shadow-sm mb-4 mb-md-0">
                         <div class="card-header border-bottom py-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -221,29 +221,6 @@
                         </div>
                     </div>
                 </section>
-
-                <!-- Active Connections Section -->
-                <aside class="col-md-4" aria-labelledby="connectionsHeading">
-                    <div class="card shadow-sm">
-                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
-                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
-                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
-                                active</span>
-                        </div>
-                        <div class="card-body">
-                            <!-- Empty State -->
-                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
-                                aria-live="polite">
-                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
-                                <p class="mt-2 mb-0">No active connections</p>
-                            </div>
-                            <!-- Connections List -->
-                            <div id="connectionsList" role="list" aria-label="Active connections">
-                                <!-- Active connections will be shown here -->
-                            </div>
-                        </div>
-                    </div>
-                </aside>
             </div>
             </div>
             <!-- /EC2 Section -->
@@ -252,7 +229,7 @@
             <div id="rdsSection" class="resource-section d-none">
             <div class="row">
                 <!-- RDS Databases Section -->
-                <section class="col-md-8" aria-labelledby="rdsHeading">
+                <section class="col-12" aria-labelledby="rdsHeading">
                     <div class="card shadow-sm mb-4 mb-md-0">
                         <div class="card-header border-bottom py-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -294,29 +271,6 @@
                         </div>
                     </div>
                 </section>
-
-                <!-- Active Connections Section (shared) -->
-                <aside class="col-md-4" aria-labelledby="connectionsHeading">
-                    <div class="card shadow-sm">
-                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
-                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
-                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
-                                active</span>
-                        </div>
-                        <div class="card-body">
-                            <!-- Empty State -->
-                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
-                                aria-live="polite">
-                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
-                                <p class="mt-2 mb-0">No active connections</p>
-                            </div>
-                            <!-- Connections List -->
-                            <div id="connectionsList" role="list" aria-label="Active connections">
-                                <!-- Active connections will be shown here -->
-                            </div>
-                        </div>
-                    </div>
-                </aside>
             </div>
             </div>
             <!-- /RDS Section -->
@@ -325,7 +279,7 @@
             <div id="ecsSection" class="resource-section d-none">
             <div class="row">
                 <!-- ECS Tasks Section -->
-                <section class="col-md-8" aria-labelledby="ecsHeading">
+                <section class="col-12" aria-labelledby="ecsHeading">
                     <div class="card shadow-sm mb-4 mb-md-0">
                         <div class="card-header border-bottom py-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
@@ -367,32 +321,30 @@
                         </div>
                     </div>
                 </section>
-
-                <!-- Active Connections Section (shared) -->
-                <aside class="col-md-4" aria-labelledby="connectionsHeading">
-                    <div class="card shadow-sm">
-                        <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
-                            <h5 class="m-0" id="connectionsHeading">Active Connections</h5>
-                            <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
-                                active</span>
-                        </div>
-                        <div class="card-body">
-                            <!-- Empty State -->
-                            <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
-                                aria-live="polite">
-                                <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
-                                <p class="mt-2 mb-0">No active connections</p>
-                            </div>
-                            <!-- Connections List -->
-                            <div id="connectionsList" role="list" aria-label="Active connections">
-                                <!-- Active connections will be shown here -->
-                            </div>
-                        </div>
-                    </div>
-                </aside>
             </div>
             </div>
             <!-- /ECS Section -->
+
+            <!-- Fixed Sidebar: Active Connections -->
+            <aside id="connectionsPanel" class="connections-sidebar card shadow-sm" aria-labelledby="connectionsPanelHeading">
+                <div class="card-header border-bottom d-flex justify-content-between align-items-center py-3">
+                    <h5 class="m-0" id="connectionsPanelHeading">Active Connections</h5>
+                    <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
+                        active</span>
+                </div>
+                <div class="card-body">
+                    <!-- Empty State -->
+                    <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
+                        aria-live="polite">
+                        <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
+                        <p class="mt-2 mb-0">No active connections</p>
+                    </div>
+                    <!-- Connections List -->
+                    <div id="connectionsList" role="list" aria-label="Active connections">
+                        <!-- Active connections will be shown here -->
+                    </div>
+                </div>
+            </aside>
         </main>
     </div>
 
@@ -570,7 +522,7 @@
 
     <!-- About Modal -->
     <div class="modal fade" id="aboutModal" tabindex="-1" aria-labelledby="aboutModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
+        <div class="modal-dialog modal-md modal-dialog-scrollable">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title d-flex align-items-center gap-2" id="aboutModalLabel">
@@ -579,94 +531,79 @@
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
                 </div>
-                <div class="modal-body">
-                    <div class="text-center mb-4">
-                        <div class="mb-3">
+                <div class="modal-body modal-body-compact">
+                    <div class="text-center mb-3">
+                        <div class="mb-2">
                             <img src="/static/images/logo.png" alt="SSM Remote Session Gateway Logo"
-                                style="max-width: 300px; height: auto;" class="img-fluid">
+                                style="max-width: 120px; height: auto;" class="img-fluid">
                         </div>
-                        <h4 class="mb-2">SSM Remote Session Gateway</h4>
-                        <p class="text-muted mb-3" id="appVersion">Version <span id="versionNumber">Loading...</span>
+                        <h5 class="mb-1">SSM Remote Session Gateway</h5>
+                        <p class="text-muted mb-2 small" id="appVersion">Version <span id="versionNumber">Loading...</span>
                         </p>
-                        <p class="lead">
-                            Cross-platform application to manage secure connections to EC2 instances and RDS databases via AWS Systems Manager (SSM).
+                        <p class="small">
+                            Manage secure connections to EC2 instances and RDS databases via AWS SSM.
                         </p>
                     </div>
 
-                    <hr class="my-4">
+                    <hr class="my-2">
 
-                    <div class="mb-5">
-                        <h6 class="mb-4 text-primary fw-bold"><i class="bi bi-stars text-warning me-2"></i>Key Features
+                    <div class="mb-3">
+                        <h6 class="mb-2 text-primary fw-bold small"><i class="bi bi-stars text-warning me-1"></i>Key Features
                         </h6>
-                        <div class="instance-info-grid">
-                            <div class="info-item">
-                                <span class="info-label text-success"><i class="bi bi-terminal-fill me-1"></i>SSH</span>
-                                <span class="info-value">Secure shell access via SSM port forwarding.</span>
+                        <div class="instance-info-grid-compact">
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-success"><i class="bi bi-terminal-fill"></i> SSH</span>
+                                <span class="info-value-compact">Port forwarding via SSM</span>
                             </div>
-                            <div class="info-item">
-                                <span class="info-label text-primary"><i class="bi bi-display-fill me-1"></i>RDP</span>
-                                <span class="info-value">Remote desktop for Windows instances.</span>
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-primary"><i class="bi bi-display-fill"></i> RDP</span>
+                                <span class="info-value-compact">Windows remote desktop</span>
                             </div>
-                            <div class="info-item">
-                                <span class="info-label text-info"><i class="bi bi-arrow-left-right me-1"></i>Custom
-                                    Forwarding</span>
-                                <span class="info-value">Forward any port through SSM tunnels.</span>
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-info"><i class="bi bi-arrow-left-right"></i> Port Forward</span>
+                                <span class="info-value-compact">Any port through SSM</span>
                             </div>
-                            <div class="info-item">
-                                <span class="info-label text-danger"><i
-                                        class="bi bi-shield-lock-fill me-1"></i>Secure</span>
-                                <span class="info-value">No open SSH ports, uses AWS IAM & SSM.</span>
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-danger"><i class="bi bi-shield-lock-fill"></i> Secure</span>
+                                <span class="info-value-compact">AWS IAM & SSM based</span>
                             </div>
-                            <div class="info-item">
-                                <span class="info-label text-secondary"><i
-                                        class="bi bi-list-check me-1"></i>Management</span>
-                                <span class="info-value">View and filter EC2 instances efficiently.</span>
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-secondary"><i class="bi bi-list-check"></i> Management</span>
+                                <span class="info-value-compact">Filter & manage instances</span>
                             </div>
-                            <div class="info-item">
-                                <span class="info-label text-dark"><i
-                                        class="bi bi-gear-fill me-1"></i>Configurable</span>
-                                <span class="info-value">Customizable port ranges & folder preferences.</span>
-                            </div>
-                            <div class="info-item">
-                                <span class="info-label text-warning"><i
-                                        class="bi bi-database me-1"></i>RDS Support</span>
-                                <span class="info-value">Connect to RDS databases via EC2 port forwarding.</span>
+                            <div class="info-item-compact">
+                                <span class="info-label-compact text-warning"><i class="bi bi-database"></i> RDS</span>
+                                <span class="info-value-compact">Database connections</span>
                             </div>
                         </div>
                     </div>
 
-                    <hr class="my-4">
+                    <hr class="my-2">
 
-                    <div class="mb-4">
-                        <h6 class="mb-3"><i class="bi bi-info-circle-fill text-info me-2"></i>About</h6>
-                        <p>
-                            SSM Remote Session Gateway is a cross-platform web application that simplifies managing EC2
-                            instances / RDS databases
-                            and establishing secure connections through AWS Systems Manager Session Manager. This
-                            project
-                            is maintained and continuously improved based on real-world usage and feedback.
+                    <div class="mb-2">
+                        <h6 class="mb-2 small"><i class="bi bi-info-circle-fill text-info me-1"></i>About</h6>
+                        <p class="small mb-2">
+                            Cross-platform web app for managing secure connections to EC2 instances and RDS databases via AWS Systems Manager.
                         </p>
-                        <p class="mb-0">
-                            <strong>Maintainer:</strong> Bart LEBOEUF<br>
-                            Contributions, feedback, and improvement ideas are always welcome!
+                        <p class="mb-0 small">
+                            <strong>Maintainer:</strong> Bart LEBOEUF
                         </p>
                     </div>
 
-                    <div class="mt-4 d-flex justify-content-center gap-4 flex-wrap">
+                    <hr class="my-2">
+
+                    <div class="d-flex justify-content-center gap-2">
                         <a href="https://github.com/bartleboeuf/ssm-remote-session-gateway"
-                            class="btn btn-outline-dark d-flex flex-column align-items-center p-3"
-                            style="min-width: 140px;" target="_blank" rel="noopener noreferrer"
+                            class="btn btn-sm btn-outline-dark d-flex align-items-center gap-1" target="_blank" rel="noopener noreferrer"
                             aria-label="Visit GitHub repository (opens in new tab)">
-                            <i class="bi bi-github fs-3 mb-2"></i>
+                            <i class="bi bi-github"></i>
                             <span>GitHub</span>
-                            <small class="text-muted">Repository</small>
                         </a>
                     </div>
 
-                    <div class="mt-4 text-center">
+                    <div class="text-center mt-2">
                         <small class="text-muted">
-                            Built with <i class="bi bi-heart-fill text-danger"></i> using Rust AXUM, Bootstrap, and AWS
-                            SDK
+                            Built with <i class="bi bi-heart-fill text-danger"></i> using Rust, AXUM, and AWS SDK
                         </small>
                     </div>
                 </div>

@@ -32,6 +32,9 @@ SSM Remote Session Gateway simplifies access to EC2 instances and RDS databases 
 - **🔐 SSH Connections**  
   Secure shell access via SSM port forwarding with automatic SSH key detection and path resolution
 
+- **🖥️ SSH Execution**  
+  Launches the local `ssh` client with the resolved private key and forwarded port over the established SSM tunnel
+
 - **🖥️ RDP Support**  
   Remote desktop connections for Windows instances with automatic password decryption using SSH keys
 
@@ -42,7 +45,7 @@ SSM Remote Session Gateway simplifies access to EC2 instances and RDS databases 
   View, filter, and manage EC2 instances with real-time status updates, OS/state filters, and comprehensive instance details
 
 - **🗄️ RDS Database Support**
-  Connect to RDS databases (MySQL, PostgreSQL, Aurora, etc.) via EC2 port forwarding with automatic database discovery and routing
+  Connect to RDS databases (MySQL, PostgreSQL, Aurora, etc.) via EC2 port forwarding with automatic database discovery and routing. Requires selecting an EC2 instance as a relay host because RDS is not directly reachable via SSM.
 
 - **🔑 Multi-Directory SSH Keys**  
   Support for multiple SSH key directories with automatic key lookup and path resolution
@@ -92,21 +95,85 @@ The user/role running this gateway needs the following permissions:
 
 ---
 
-## 🛠️ Build & Run
+## 🛠️ Build
+
+Clone the repository and build locally with Cargo:
 
 ```bash
 git clone https://github.com/bartleboeuf/ssm-remote-session-gateway.git
 cd ssm-remote-session-gateway
+cargo build --release
+```
+
+You can also download a pre-built binary from the project GitHub releases page instead of building locally.
+
+## ▶️ Run
+
+Run directly from Cargo:
+
+```bash
 cargo run
 ```
 
-The server listens on `https://127.0.0.1:5000` and serves both the UI and `/api/*` endpoints.
+Or run the release binary after building locally:
+
+```bash
+target/release/ssm-remote-session-gateway
+```
+
+By default the server listens on `http://127.0.0.1:5000` and serves both the UI and `/api/*` endpoints. Use `--https` or `--tls` to enable local TLS and serve over `https://127.0.0.1:5000`.
+
+---
+
+## 🛡️ HTTPS / TLS Startup
+
+### Run without TLS
+
+Start the server using Cargo:
+
+```bash
+cargo run
+```
+
+Or run the release binary:
+
+```bash
+target/release/ssm-remote-session-gateway
+```
+
+This starts the server on `http://127.0.0.1:5000`.
+
+### Run with TLS enabled
+
+Start the server using Cargo with TLS:
+
+```bash
+cargo run -- --https
+# or
+cargo run -- --tls
+```
+
+Or run the release binary with TLS enabled:
+
+```bash
+target/release/ssm-remote-session-gateway --https
+```
+
+When TLS is enabled, the app loads or generates a self-signed certificate at `certs/cert.pem` and a private key at `certs/key.pem` by default. You can override these paths with:
+
+```bash
+export TLS_CERT_PATH=/path/to/cert.pem
+export TLS_KEY_PATH=/path/to/key.pem
+cargo run -- --https
+```
+
+> `--https` and `--tls` are equivalent startup flags.
 
 ---
 
 ## 🎮 Usage
 
-Open `https://127.0.0.1:5000` in your browser. Frontend assets live under `src/static`, and the API is served under `/api/*`.
+Open `http://127.0.0.1:5000` in your browser, or `https://127.0.0.1:5000` when started with `--https`/`--tls`. Frontend assets live under `src/static`, and the API is served under `/api/*`.
 
 ---
 
@@ -162,10 +229,10 @@ Binary: `target/release/ssm-remote-session-gateway`.
    - View your EC2 instances and RDS databases in the lists
 
 2. **Start a Connection**
-   - **SSH**: Click the "SSH" button on an EC2 instance card
+   - **SSH**: Click the "SSH" button on an EC2 instance card. The gateway starts an SSM port-forward tunnel and launches your local `ssh` client with the resolved key and local port.
    - **RDP**: Click the "RDP" button on Windows EC2 instances
    - **Custom Port**: Click the "Port" button and specify remote/local ports
-   - **RDS Database**: Click the "Connect" button on a database and select an EC2 instance to route through
+   - **RDS Database**: Click the "Connect" button on a database and select an EC2 instance to route through as a relay host. RDS is accessed via the selected EC2 instance because the database itself does not support direct SSM port forwarding.
 
 3. **Manage Connections**
    - View active connections in the sidebar
@@ -290,6 +357,11 @@ export AWS_DEFAULT_REGION=us-east-1
 - Provide the PEM contents directly when prompted.
 
 </details>
+---
+
+## 👤 Author
+
+Created and maintained by **[Bart Leboeuf](https://github.com/bartleboeuf)**.
 
 ---
 
@@ -301,12 +373,9 @@ MIT License. See `LICENSE` for details.
 
 ## 🎯 Roadmap
 
-- [ ] Improve instances retrieval algorithm
-- [ ] Enhanced connection history
-- [ ] Connection templates/presets
-- [ ] Batch operations on instances
-- [ ] Export connection details
 - [ ] Dark mode support
+- [ ] CloudShell support
+- [ ] ECS task discovery and SSM-backed host connect
 
 ---
 
