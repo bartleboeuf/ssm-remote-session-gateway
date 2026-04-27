@@ -484,6 +484,7 @@ pub async fn connect(
         }
     };
 
+    // Update profile and region atomically (held within write lock through save)
     let prefs_snapshot = {
         let mut prefs = state.prefs.write().await;
         prefs.last_profile = Some(body.profile.clone());

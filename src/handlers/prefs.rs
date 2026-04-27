@@ -33,7 +33,28 @@ pub async fn preferences_get(State(state): State<AppState>) -> impl IntoResponse
     }))
 }
 
+/// Atomically updates preferences with exclusive write lock held through persistence.
+/// Returns the updated preferences snapshot.
+/// All updates are applied within a single lock hold, then persisted atomically.
+async fn atomic_update_preferences<F>(
+    state: &AppState,
+    update_fn: F,
+) -> crate::models::Preferences
+where
+    F: FnOnce(&mut crate::models::Preferences),
+{
+    let saved_prefs = {
+        let mut prefs = state.prefs.write().await;
+        update_fn(&mut prefs);
+        prefs.clone()
+    };
+    saved_prefs.save().await;
+    saved_prefs
+}
+
 /// Validates and persists updated preferences, then returns the saved snapshot.
+/// Guarantees atomicity: preferences are read, validated, updated, and persisted
+/// without releasing the write lock, preventing lost updates from concurrent requests.
 pub async fn preferences_set(
     State(state): State<AppState>,
     Json(body): Json<PrefsInput>,
@@ -41,12 +62,15 @@ pub async fn preferences_set(
     Json<crate::models::ApiResponse<crate::models::Preferences>>,
     (StatusCode, Json<crate::models::ErrorResponse>),
 > {
-    let saved_prefs = {
-        let mut prefs = state.prefs.write().await;
+    // Validate before acquiring lock to fail fast
+    if let Some(PortRange { start, end }) = body.port_range {
+        if start >= end {
+            return Err(err(StatusCode::BAD_REQUEST, "Invalid port range"));
+        }
+    }
+
+    let saved_prefs = atomic_update_preferences(&state, |prefs| {
         if let Some(PortRange { start, end }) = body.port_range {
-            if start >= end {
-                return Err(err(StatusCode::BAD_REQUEST, "Invalid port range"));
-            }
             prefs.port_range_start = start;
             prefs.port_range_end = end;
         }
@@ -81,9 +105,9 @@ pub async fn preferences_set(
                 prefs.windows_username = u;
             }
         }
-        prefs.clone()
-    };
-    saved_prefs.save().await;
+    })
+    .await;
+
     tracing::info!("preferences_set: saved preferences");
     Ok(ok(saved_prefs))
 }

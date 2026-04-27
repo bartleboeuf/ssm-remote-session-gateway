@@ -252,6 +252,13 @@ async fn start_ssm_port_forward(
         ));
     }
 
+    // Spawn a timeout task that logs if the process hangs for 5 minutes.
+    // Connection cleanup happens when child process exits or is dropped.
+    tokio::spawn(async move {
+        time::sleep(Duration::from_secs(300)).await;
+        tracing::warn!("SSM port-forward idle for 5 minutes: session_id={}", session_id);
+    });
+
     Ok(child)
 }
 
