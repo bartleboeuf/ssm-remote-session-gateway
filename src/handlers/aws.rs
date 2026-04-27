@@ -415,7 +415,6 @@ pub async fn list_regions(
         }
         Err(e) => {
             warn!("list_regions failed: {e}");
-            println!("AWS error details: {:#?}", e);
             Json(serde_json::json!({
                 "ok": false,
                 "data": [],

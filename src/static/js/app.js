@@ -1517,15 +1517,35 @@ const app = {
 
         // Display password with copy functionality
         const passwordId = `${passwordElementId}-value`;
-        const escapedPassword = password.replace(/'/g, "\\'").replace(/"/g, '&quot;');
-        passwordElement.innerHTML = `
-    <div class="d-flex justify-content-between align-items-center">
-                <span class="font-monospace" id="${passwordId}" style="cursor: pointer;" onclick="app.copy_text('${escapedPassword}')" title="Click to copy">${this.mask_password(password)}</span>
-                <button class="btn btn-sm btn-link p-0 ms-2" onclick="app.toggle_password_visibility('${passwordId}', '${escapedPassword}')" title="Show/Hide password">
-                    <i class="bi bi-eye" id="${passwordId}-icon"></i>
-                </button>
-            </div>
-    `;
+
+        // Build DOM elements programmatically to avoid XSS
+        const container = document.createElement('div');
+        container.className = 'd-flex justify-content-between align-items-center';
+
+        const span = document.createElement('span');
+        span.id = passwordId;
+        span.className = 'font-monospace';
+        span.style.cursor = 'pointer';
+        span.title = 'Click to copy';
+        span.textContent = this.mask_password(password);
+        span.dataset.password = password;
+        span.onclick = () => this.copy_to_clipboard(password);
+
+        const button = document.createElement('button');
+        button.className = 'btn btn-sm btn-link p-0 ms-2';
+        button.title = 'Show/Hide password';
+        button.dataset.passwordId = passwordId;
+        button.dataset.password = password;
+        button.onclick = () => this.toggle_password_visibility(passwordId, password);
+
+        const icon = document.createElement('i');
+        icon.id = `${passwordId}-icon`;
+        icon.className = 'bi bi-eye';
+
+        button.appendChild(icon);
+        container.appendChild(span);
+        container.appendChild(button);
+        passwordElement.replaceChildren(container);
     },
 
     // Read file as text
