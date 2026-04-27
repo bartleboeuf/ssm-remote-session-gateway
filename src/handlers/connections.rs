@@ -35,6 +35,27 @@ fn find_free_port(start: u16, end: u16) -> Option<u16> {
     (start..=end).find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
 }
 
+/// Validates that an SSM document exists and is accessible.
+/// Returns detailed error if document is not found or inaccessible.
+async fn validate_ssm_document(
+    client: &ssm::Client,
+    doc_name: &str,
+) -> Result<(), (StatusCode, Json<crate::models::ErrorResponse>)> {
+    match client.describe_document().name(doc_name).send().await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            error!("SSM document validation failed for {}: {e}", doc_name);
+            Err(crate::models::err(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "SSM document '{}' not available. Ensure the instance has SSM agent running and your credentials have ssm:StartSession permission.",
+                    doc_name
+                ),
+            ))
+        }
+    }
+}
+
 /// Starts an SSM port forwarding session by calling the AWS SSM StartSession API directly
 /// via the SDK and then invoking the `session-manager-plugin` binary with the session token.
 ///
@@ -116,7 +137,10 @@ async fn start_ssm_port_forward(
             (doc, params, sm_params)
         };
 
-    // --- Step 3: Call SSM StartSession API ---
+    // --- Step 3: Validate SSM document exists ---
+    validate_ssm_document(&ssm_client, document_name).await?;
+
+    // --- Step 4: Call SSM StartSession API ---
     tracing::info!(
         "Calling SSM StartSession API: target={} document={} parameters={:?}",
         info.instance_id,

@@ -1216,55 +1216,73 @@ pub async fn list_rds_databases(State(state): State<AppState>) -> impl IntoRespo
     .await;
 
     let client = rds::Client::new(&cfg);
-    match client.describe_db_instances().send().await {
-        Ok(resp) => {
-            let mut entries = Vec::new();
-            for db in resp.db_instances() {
-                if let Some(db_id) = db.db_instance_identifier() {
-                    let endpoint = db
-                        .endpoint()
-                        .and_then(|e| e.address())
-                        .unwrap_or("")
-                        .to_string();
-                    let port = db.endpoint().and_then(|e| e.port()).unwrap_or(3306) as u16;
-                    let engine = db.engine().unwrap_or("unknown").to_string();
-                    let status = db.db_instance_status().unwrap_or("unknown").to_string();
+    let mut entries = Vec::new();
+    let mut next_token: Option<String> = None;
 
-                    entries.push(RdsInstance {
-                        db_instance_identifier: db_id.to_string(),
-                        endpoint,
-                        port,
-                        engine,
-                        status,
-                    });
+    loop {
+        let mut req = client.describe_db_instances();
+        if let Some(token) = next_token.take() {
+            req = req.marker(token);
+        }
+
+        match req.send().await {
+            Ok(resp) => {
+                for db in resp.db_instances() {
+                    if let Some(db_id) = db.db_instance_identifier() {
+                        let endpoint = db
+                            .endpoint()
+                            .and_then(|e| e.address())
+                            .unwrap_or("")
+                            .to_string();
+                        let port = db.endpoint().and_then(|e| e.port()).unwrap_or(3306) as u16;
+                        let engine = db.engine().unwrap_or("unknown").to_string();
+                        let status = db.db_instance_status().unwrap_or("unknown").to_string();
+
+                        entries.push(RdsInstance {
+                            db_instance_identifier: db_id.to_string(),
+                            endpoint,
+                            port,
+                            engine,
+                            status,
+                        });
+                    }
+                }
+
+                next_token = resp.marker().map(|m| m.to_string());
+                if next_token.is_none() {
+                    break;
                 }
             }
+            Err(e) => {
+                warn!("list_rds_databases describe_db_instances failed: {e}");
+                let mut refreshes = state.rds_refreshes.lock().await;
+                refreshes.remove(&cache_key);
+                drop(refreshes);
 
-            let cached = CachedRdsInstances {
-                fetched_at: now_secs(),
-                entries: entries.clone(),
-            };
-
-            let mut cache = state.rds_cache.lock().await;
-            cache.insert(cache_key.clone(), cached);
-            drop(cache);
-
-            let mut refreshes = state.rds_refreshes.lock().await;
-            refreshes.remove(&cache_key);
-            drop(refreshes);
-
-            info!("list_rds_databases success: {} databases", entries.len());
-            Json(entries).into_response()
-        }
-        Err(e) => {
-            warn!("list_rds_databases failed: {e}");
-            let mut refreshes = state.rds_refreshes.lock().await;
-            refreshes.remove(&cache_key);
-            drop(refreshes);
-
-            crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response()
+                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response();
+            }
         }
     }
+
+    let cached = CachedRdsInstances {
+        fetched_at: now_secs(),
+        entries: entries.clone(),
+    };
+
+    let mut cache = state.rds_cache.lock().await;
+    cache.insert(cache_key.clone(), cached);
+    drop(cache);
+
+    let mut refreshes = state.rds_refreshes.lock().await;
+    if let Some(notify) = refreshes.remove(&cache_key) {
+        drop(refreshes);
+        notify.notify_waiters();
+    } else {
+        drop(refreshes);
+    }
+
+    info!("list_rds_databases success: {} databases", entries.len());
+    Json(entries).into_response()
 }
 
 /// List ECS tasks in the current region with caching and coordination.
@@ -1343,81 +1361,108 @@ pub async fn list_ecs_tasks(State(state): State<AppState>) -> impl IntoResponse 
     let ecs_client = ecs::Client::new(&cfg);
     let mut entries = Vec::new();
 
-    // List clusters first
-    match ecs_client.list_clusters().send().await {
-        Ok(clusters_resp) => {
-            for cluster_arn in clusters_resp.cluster_arns() {
-                let cluster_name = cluster_arn
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(cluster_arn)
-                    .to_string();
+    // List clusters first with pagination
+    let mut cluster_token: Option<String> = None;
+    loop {
+        let mut cluster_req = ecs_client.list_clusters();
+        if let Some(token) = cluster_token.take() {
+            cluster_req = cluster_req.next_token(token);
+        }
 
-                // List tasks in this cluster
-                if let Ok(tasks_resp) = ecs_client
+        let clusters_resp = match cluster_req.send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                warn!("list_ecs_tasks failed to list clusters: {e}");
+                let mut refreshes = state.ecs_refreshes.lock().await;
+                refreshes.remove(&cache_key);
+                drop(refreshes);
+                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response();
+            }
+        };
+
+        for cluster_arn in clusters_resp.cluster_arns() {
+            let cluster_name = cluster_arn
+                .split('/')
+                .next_back()
+                .unwrap_or(cluster_arn)
+                .to_string();
+
+            // List tasks in this cluster with pagination
+            let mut task_token: Option<String> = None;
+            loop {
+                let mut tasks_req = ecs_client
                     .list_tasks()
                     .cluster(cluster_arn)
-                    .desired_status(ecs::types::DesiredStatus::Running)
-                    .send()
-                    .await
-                {
-                    for task_arn in tasks_resp.task_arns() {
-                        // Describe task to get details
-                        if let Ok(describe_resp) = ecs_client
-                            .describe_tasks()
-                            .cluster(cluster_arn)
-                            .tasks(task_arn)
-                            .send()
-                            .await
-                        {
-                            for task in describe_resp.tasks() {
-                                if let Some(task_def) = task.task_definition_arn() {
-                                    let task_def_name = task_def
-                                        .split('/')
-                                        .nth_back(1)
-                                        .unwrap_or("unknown")
-                                        .to_string();
+                    .desired_status(ecs::types::DesiredStatus::Running);
+                if let Some(token) = task_token.take() {
+                    tasks_req = tasks_req.next_token(token);
+                }
 
-                                    let container_name = task
-                                        .containers()
-                                        .first()
-                                        .and_then(|c| c.name())
-                                        .unwrap_or("unknown")
-                                        .to_string();
+                let tasks_resp = match tasks_req.send().await {
+                    Ok(resp) => resp,
+                    Err(e) => {
+                        warn!("list_ecs_tasks failed to list tasks in cluster {}: {e}", cluster_arn);
+                        break;
+                    }
+                };
 
-                                    let launch_type = task
-                                        .launch_type()
-                                        .map(|lt| format!("{:?}", lt))
-                                        .unwrap_or_else(|| "EC2".to_string());
+                for task_arn in tasks_resp.task_arns() {
+                    // Describe task to get details
+                    if let Ok(describe_resp) = ecs_client
+                        .describe_tasks()
+                        .cluster(cluster_arn)
+                        .tasks(task_arn)
+                        .send()
+                        .await
+                    {
+                        for task in describe_resp.tasks() {
+                            if let Some(task_def) = task.task_definition_arn() {
+                                let task_def_name = task_def
+                                    .split('/')
+                                    .nth_back(1)
+                                    .unwrap_or("unknown")
+                                    .to_string();
 
-                                    let status = task
-                                        .last_status()
-                                        .map(|s| format!("{:?}", s))
-                                        .unwrap_or_else(|| "UNKNOWN".to_string());
+                                let container_name = task
+                                    .containers()
+                                    .first()
+                                    .and_then(|c| c.name())
+                                    .unwrap_or("unknown")
+                                    .to_string();
 
-                                    entries.push(EcsTask {
-                                        task_arn: task_arn.to_string(),
-                                        task_definition: task_def_name,
-                                        container_name,
-                                        launch_type,
-                                        status,
-                                        cluster_name: cluster_name.clone(),
-                                    });
-                                }
+                                let launch_type = task
+                                    .launch_type()
+                                    .map(|lt| format!("{:?}", lt))
+                                    .unwrap_or_else(|| "EC2".to_string());
+
+                                let status = task
+                                    .last_status()
+                                    .map(|s| format!("{:?}", s))
+                                    .unwrap_or_else(|| "UNKNOWN".to_string());
+
+                                entries.push(EcsTask {
+                                    task_arn: task_arn.to_string(),
+                                    task_definition: task_def_name,
+                                    container_name,
+                                    launch_type,
+                                    status,
+                                    cluster_name: cluster_name.clone(),
+                                });
                             }
                         }
                     }
                 }
+
+                task_token = tasks_resp.next_token().map(|t| t.to_string());
+                if task_token.is_none() {
+                    break;
+                }
             }
         }
-        Err(e) => {
-            warn!("list_ecs_tasks failed to list clusters: {e}");
-            let mut refreshes = state.ecs_refreshes.lock().await;
-            refreshes.remove(&cache_key);
-            drop(refreshes);
 
-            return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e))
-                .into_response();
+        cluster_token = clusters_resp.next_token().map(|t| t.to_string());
+        if cluster_token.is_none() {
+            break;
         }
     }
 
@@ -1431,8 +1476,12 @@ pub async fn list_ecs_tasks(State(state): State<AppState>) -> impl IntoResponse 
     drop(cache);
 
     let mut refreshes = state.ecs_refreshes.lock().await;
-    refreshes.remove(&cache_key);
-    drop(refreshes);
+    if let Some(notify) = refreshes.remove(&cache_key) {
+        drop(refreshes);
+        notify.notify_waiters();
+    } else {
+        drop(refreshes);
+    }
 
     info!("list_ecs_tasks success: {} tasks", entries.len());
     Json(entries).into_response()
