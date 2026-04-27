@@ -628,15 +628,19 @@ pub async fn list_instances(
                 cache_key
             );
             slot.notify.notified().await;
+
+            // After refresh completes, check cache again for fresh data
             if let Some(cached) = {
                 let cache = state.instance_cache.lock().await;
                 cache.get(&cache_key).cloned()
             } {
                 let now = now_secs();
+                // Verify data is fresh (just refreshed), not expired
                 if now - cached.fetched_at <= ttl {
                     return Json(filter_cached_instances(cached.entries, &params)).into_response();
                 }
             }
+            // If cache is still expired after refresh, try again (leader may have failed)
             continue;
         }
 
@@ -733,6 +737,7 @@ pub async fn list_instances(
             })
             .collect();
 
+        // Insert fresh data into cache with current timestamp
         let cache_snapshot = {
             let mut cache = state.instance_cache.lock().await;
             cache.insert(
@@ -749,6 +754,10 @@ pub async fn list_instances(
             warn!("Failed to persist instance cache: {e}");
         }
 
+        // Notify all waiting requests that refresh is complete.
+        // Timing: Cache is inserted above before notify, ensuring waiters see fresh data.
+        // Brief window (ms-scale) where cache is updated but notified tasks not yet resumed,
+        // but when they resume, TTL check ensures they get fresh data or retry.
         complete_instance_refresh(&state, &cache_key).await;
         return Json(filter_cached_instances(instances, &params)).into_response();
     }
