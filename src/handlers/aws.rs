@@ -183,6 +183,10 @@ mod tests {
             connections: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             instance_cache: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             instance_refreshes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            rds_cache: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            rds_refreshes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            ecs_cache: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+            ecs_refreshes: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
             shutdown_tx,
         }
     }
