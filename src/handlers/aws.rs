@@ -262,6 +262,34 @@ pub async fn is_aws_configured() -> bool {
     }
 }
 
+/// Tests if RDS describe_db_instances can be called with current credentials/profile
+async fn can_access_rds() -> bool {
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let rds_client = rds::Client::new(&config);
+
+    match rds_client.describe_db_instances().send().await {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("RDS health check failed: {e}");
+            false
+        }
+    }
+}
+
+/// Tests if ECS list_clusters can be called with current credentials/profile
+async fn can_access_ecs() -> bool {
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+    let ecs_client = ecs::Client::new(&config);
+
+    match ecs_client.list_clusters().send().await {
+        Ok(_) => true,
+        Err(e) => {
+            warn!("ECS health check failed: {e}");
+            false
+        }
+    }
+}
+
 /// Health check endpoint to verify AWS CLI, session manager plugin, and credentials availability.
 /// Returns a JSON object with the status of each component and environment information. This can be used by
 /// the frontend to determine if AWS integration is properly set up and provide helpful error messages if not.
@@ -307,11 +335,20 @@ pub async fn health() -> impl IntoResponse {
         "not installed".to_string()
     };
 
+    let aws_configured = is_aws_configured().await;
+    let (rds_accessible, ecs_accessible) = if aws_configured {
+        (can_access_rds().await, can_access_ecs().await)
+    } else {
+        (false, false)
+    };
+
     Json(serde_json::json!({
         "aws_cli": which("aws").is_ok(),
         "session_manager_plugin": smp_installed,
         "session_manager_plugin_version": smp_version,
-        "aws_credentials": is_aws_configured().await,
+        "aws_credentials": aws_configured,
+        "rds_accessible": rds_accessible,
+        "ecs_accessible": ecs_accessible,
         "os": std::env::consts::OS,
         "version": env!("CARGO_PKG_VERSION"),
     }))
@@ -1269,7 +1306,8 @@ pub async fn list_rds_databases(State(state): State<AppState>) -> impl IntoRespo
                 refreshes.remove(&cache_key);
                 drop(refreshes);
 
-                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response();
+                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e))
+                    .into_response();
             }
         }
     }
@@ -1386,7 +1424,8 @@ pub async fn list_ecs_tasks(State(state): State<AppState>) -> impl IntoResponse 
                 let mut refreshes = state.ecs_refreshes.lock().await;
                 refreshes.remove(&cache_key);
                 drop(refreshes);
-                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e)).into_response();
+                return crate::models::err(StatusCode::BAD_REQUEST, format!("AWS error: {}", e))
+                    .into_response();
             }
         };
 
@@ -1411,7 +1450,10 @@ pub async fn list_ecs_tasks(State(state): State<AppState>) -> impl IntoResponse 
                 let tasks_resp = match tasks_req.send().await {
                     Ok(resp) => resp,
                     Err(e) => {
-                        warn!("list_ecs_tasks failed to list tasks in cluster {}: {e}", cluster_arn);
+                        warn!(
+                            "list_ecs_tasks failed to list tasks in cluster {}: {e}",
+                            cluster_arn
+                        );
                         break;
                     }
                 };

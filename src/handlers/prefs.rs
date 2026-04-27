@@ -36,10 +36,7 @@ pub async fn preferences_get(State(state): State<AppState>) -> impl IntoResponse
 /// Atomically updates preferences with exclusive write lock held through persistence.
 /// Returns the updated preferences snapshot.
 /// All updates are applied within a single lock hold, then persisted atomically.
-async fn atomic_update_preferences<F>(
-    state: &AppState,
-    update_fn: F,
-) -> crate::models::Preferences
+async fn atomic_update_preferences<F>(state: &AppState, update_fn: F) -> crate::models::Preferences
 where
     F: FnOnce(&mut crate::models::Preferences),
 {
@@ -64,8 +61,14 @@ pub async fn preferences_set(
 > {
     // Validate before acquiring lock to fail fast
     if let Some(PortRange { start, end }) = body.port_range {
+        if start < 1024 {
+            return Err(err(StatusCode::BAD_REQUEST, "Start port must be at least 1024"));
+        }
+        if end < 1024 {
+            return Err(err(StatusCode::BAD_REQUEST, "End port must be at least 1024"));
+        }
         if start >= end {
-            return Err(err(StatusCode::BAD_REQUEST, "Invalid port range"));
+            return Err(err(StatusCode::BAD_REQUEST, "Start port must be less than end port"));
         }
     }
 
