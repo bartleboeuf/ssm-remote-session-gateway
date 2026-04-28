@@ -10,24 +10,7 @@ permissions:
   packages: write
 
 jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
-    steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: Release ${{ github.ref_name }}
-          draft: false
-          prerelease: false
-
   build:
-    needs: create-release
     strategy:
       matrix:
         include:
@@ -37,15 +20,6 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             name: linux-aarch64
-            use_cross: true
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            name: linux-x86_64-static
-            static: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            name: linux-aarch64-static
-            static: true
             use_cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
@@ -62,20 +36,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl-tools for x86_64 static builds
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-
-      - name: Install cross for ARM static builds
+      - name: Install cross for ARM builds
         if: matrix.use_cross == true
         run: cargo install cross --git https://github.com/cross-rs/cross
 
@@ -85,18 +53,14 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build binary (Linux, macOS)
-        if: matrix.target != 'x86_64-pc-windows-msvc' && matrix.static != true && matrix.use_cross != true
+        if: matrix.target != 'x86_64-pc-windows-msvc' && matrix.use_cross != true
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build binary (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Build x86_64 static binary with cargo
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build ARM static binary with cross
+      - name: Build ARM binary with cross
         if: matrix.use_cross == true
         run: cross build --release --target ${{ matrix.target }}
 
@@ -106,12 +70,6 @@ jobs:
         run: |
           BINARY_NAME="ssm-remote-session-gateway"
           echo "binary_name=${BINARY_NAME}" >> $GITHUB_OUTPUT
-
-
-      - name: Verify static binary
-        if: matrix.static == true
-        shell: bash
-        run: file target/${{ matrix.target }}/release/${{ steps.binary_name.outputs.binary_name }}${{ matrix.ext }}
 
       - name: Show binary info
         shell: bash
@@ -145,26 +103,38 @@ jobs:
           echo "archive_name=${ARCHIVE_FILE}" >> $GITHUB_OUTPUT
           echo "asset_path=${ARCHIVE_FILE}" >> $GITHUB_OUTPUT
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ${{ steps.archive.outputs.asset_path }}
-          asset_name: ${{ steps.archive.outputs.archive_name }}
-          asset_content_type: application/octet-stream
-
       - name: Generate checksum for asset
         shell: bash
         run: sha256sum ${{ steps.archive.outputs.archive_name }} >> checksums.txt
 
-      - name: Upload checksum
-        uses: actions/upload-release-asset@v1
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}-${{ github.ref_name }}
+          path: |
+            ${{ steps.archive.outputs.archive_name }}
+            checksums.txt
+          retention-days: 1
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./release-assets
+
+      - name: Flatten artifacts
+        shell: bash
+        run: |
+          mkdir -p ./flat-assets
+          find ./release-assets -type f -exec mv {} ./flat-assets/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./flat-assets/*
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: checksums.txt
-          asset_name: checksums_${{ matrix.name }}.txt
-          asset_content_type: text/plain
