@@ -353,6 +353,7 @@ pub struct ExecuteSshRequest {
     pub connection_id: Option<uuid::Uuid>,
 }
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn escape_single_quotes_for_bash(input: &str) -> String {
     input.replace("'", "'\\''")
 }
@@ -390,7 +391,7 @@ fn launch_ssh_in_terminal(
     #[cfg(target_os = "windows")]
     {
         let pwsh_command = format!("& {{ {} }}", command.replace('"', "\\\""));
-        let launcher = if which("wt.exe").is_ok() {
+        let mut launcher = if which("wt.exe").is_ok() {
             let mut cmd = Command::new("wt.exe");
             cmd.args([
                 "new-tab",
