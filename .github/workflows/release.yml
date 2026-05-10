@@ -77,6 +77,13 @@ jobs:
       - name: Set up swap for ARM builds
         if: matrix.use_cross == true && matrix.os == 'ubuntu-latest'
         run: |
+          # Disable existing swap if present
+          sudo swapoff /swapfile 2>/dev/null || true
+          
+          # Remove existing swap file if present
+          sudo rm -f /swapfile
+          
+          # Create new swap file
           sudo dd if=/dev/zero of=/swapfile bs=1G count=4
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
