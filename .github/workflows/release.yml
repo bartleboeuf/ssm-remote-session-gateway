@@ -45,24 +45,47 @@ jobs:
 
       - name: Install cross for ARM builds
         if: matrix.use_cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: |
+          cargo install cross --locked --git https://github.com/cross-rs/cross 2>&1 | grep -v "already installed" || true
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
+      - name: Free up disk space
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          df -h
+          sudo apt-get clean -y
+          sudo rm -rf /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
       - name: Build binary (Linux, macOS)
         if: matrix.target != 'x86_64-pc-windows-msvc' && matrix.use_cross != true
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} -j 3
+        env:
+          CARGO_BUILD_JOBS: 3
+          RUSTFLAGS: -C link-arg=-fuse-ld=lld
 
       - name: Build binary (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} -j 3
+        env:
+          CARGO_BUILD_JOBS: 3
+
+      - name: Set up swap for ARM builds
+        if: matrix.use_cross == true && matrix.os == 'ubuntu-latest'
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Build ARM binary with cross
         if: matrix.use_cross == true
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} -j 2
 
       - name: Get binary name
         id: binary_name
