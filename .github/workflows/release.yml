@@ -77,7 +77,7 @@ jobs:
       - name: Set up swap for ARM builds
         if: matrix.use_cross == true && matrix.os == 'ubuntu-latest'
         run: |
-          sudo fallocate -l 4G /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1G count=4
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
