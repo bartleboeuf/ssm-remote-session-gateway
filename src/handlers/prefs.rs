@@ -62,13 +62,22 @@ pub async fn preferences_set(
     // Validate before acquiring lock to fail fast
     if let Some(PortRange { start, end }) = body.port_range {
         if start < 1024 {
-            return Err(err(StatusCode::BAD_REQUEST, "Start port must be at least 1024"));
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "Start port must be at least 1024",
+            ));
         }
         if end < 1024 {
-            return Err(err(StatusCode::BAD_REQUEST, "End port must be at least 1024"));
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "End port must be at least 1024",
+            ));
         }
         if start >= end {
-            return Err(err(StatusCode::BAD_REQUEST, "Start port must be less than end port"));
+            return Err(err(
+                StatusCode::BAD_REQUEST,
+                "Start port must be less than end port",
+            ));
         }
     }
 

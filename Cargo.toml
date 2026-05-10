@@ -8,43 +8,44 @@ license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/bartleboeuf/ssm-remote-session-gateway"
 repository = "https://github.com/bartleboeuf/ssm-remote-session-gateway"
-rust-version = "1.93.0"  # Specify minimum Rust version
+rust-version = "1.94.0"  # Specify minimum Rust version
 categories = ["development-tools", "command-line-utilities"]
 keywords = ["axum", "aws", "aws-sdk-ssm"]
 build = "build.rs"
 
 [dependencies]
-axum = { version = "0.8.9", features = ["macros", "json", "http1", "http2"] }
-aws-config = { version = "1.8.16", features = ["behavior-version-latest"] }
-aws-credential-types = "1.2.14"
-aws-sdk-ec2 = { version = "1.223", features = ["rustls"] }
-aws-sdk-ecs = "1.124.0"
-aws-sdk-iam = "1.108.0"
-aws-sdk-rds = "1.132.0"
-aws-sdk-sts = "1.103.0"
-aws-sdk-ssm = { version = "1.109", features = ["rustls"] }
-aws-types = "1.3.15"
-anyhow = "1.0.102"
-directories = "6.0.0"
-hyper-util = { version = "0.1.20", features = ["tokio", "server", "http1", "http2"] }
-rustls = "0.23.39"
-rcgen = "0.14.7"
-time = { version = "0.3.47", features = ["std"] }
-webbrowser = "1.2.1"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-tokio = { version = "1.52.1", features = ["full"] }
-tokio-rustls = "0.26.4"
-tower = { version = "0.5.3", features = ["limit", "timeout"] }
-tower-http = { version = "0.6.8", features = ["cors", "fs", "trace", "limit", "set-header", "compression-br", "compression-gzip"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
-tracing-appender = "0.2.5"
-uuid = { version = "1.23.1", features = ["v4", "serde"] }
-which = "8.0.2"
-base64 = "0.22.1"
-rsa = { version = "0.9.10", features = ["pem"] }
-static-serve = "0.6.1"
+axum = { version = "0.8.9", default-features = false, features = ["macros", "json", "http1", "http2", "query"] }
+aws-config = { version = "1.8.16", default-features = false, features = ["behavior-version-latest", "rt-tokio", "rustls", "sso"] }
+aws-lc-rs = { version = "1", default-features = false }
+aws-credential-types = { version = "1.2.14", default-features = false }
+aws-sdk-ec2 = { version = "1.225", default-features = false, features = ["rustls"] }
+aws-sdk-ecs = { version = "1.124.0", default-features = false }
+aws-sdk-iam = { version = "1.108.1", default-features = false }
+aws-sdk-rds = { version = "1.132.0", default-features = false }
+aws-sdk-sts = { version = "1.103.0", default-features = false }
+aws-sdk-ssm = { version = "1.109", default-features = false, features = ["rustls"] }
+aws-types = { version = "1.3.15", default-features = false }
+anyhow = { version = "1.0.102", default-features = false }
+directories = { version = "6.0.0", default-features = false }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio", "server", "http1", "http2", "service"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["aws_lc_rs", "pem"] }
+time = { version = "0.3.47", default-features = false, features = ["std"] }
+webbrowser = { version = "1.2.1", default-features = false }
+serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde_json = { version = "1.0.149", default-features = false, features = ["std"] }
+tokio = { version = "1.52.3", default-features = false, features = ["fs", "io-std", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-rustls = { version = "0.26.4", default-features = false }
+tower = { version = "0.5.3", default-features = false, features = ["limit", "timeout"] }
+tower-http = { version = "0.6.10", default-features = false, features = ["cors", "trace", "limit", "set-header", "compression-br", "compression-gzip"] }
+tracing = { version = "0.1.44", default-features = false }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
+tracing-appender = { version = "0.2.5", default-features = false }
+uuid = { version = "1.23.1", default-features = false, features = ["v4", "serde"] }
+which = { version = "8.0.2", default-features = false, features = ["real-sys"] }
+base64 = { version = "0.22.1", default-features = false, features = ["std"] }
+rsa = { version = "0.9.10", default-features = false, features = ["pem"] }
+static-serve = { version = "0.6.1", default-features = false }
 
 [profile.release]
 lto = "fat"
