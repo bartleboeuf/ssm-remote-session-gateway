@@ -61,12 +61,18 @@ jobs:
           sudo rm -rf /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h
 
-      - name: Build binary (Linux, macOS)
-        if: matrix.target != 'x86_64-pc-windows-msvc' && matrix.use_cross != true
+      - name: Build binary (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.use_cross != true
         run: cargo build --release --target ${{ matrix.target }} -j 3
         env:
           CARGO_BUILD_JOBS: 3
           RUSTFLAGS: -C link-arg=-fuse-ld=lld
+
+      - name: Build binary (macOS)
+        if: matrix.os == 'macos-latest' && matrix.use_cross != true
+        run: cargo build --release --target ${{ matrix.target }} -j 3
+        env:
+          CARGO_BUILD_JOBS: 3
 
       - name: Build binary (Windows)
         if: matrix.target == 'x86_64-pc-windows-msvc'
