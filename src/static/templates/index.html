@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="api-token" content="__API_TOKEN__">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
         content="SSM Remote Session Gateway - Manage AWS EC2 instances via Session Manager with SSH, RDP, and port forwarding capabilities">
@@ -13,22 +14,18 @@
     <meta property="og:description" content="Manage AWS EC2 instances via Session Manager">
 
     <!-- Twitter -->
-    <meta property="twitter:card" content="summary">
-    <meta property="twitter:title" content="SSM Remote Session Gateway">
-    <meta property="twitter:description" content="Manage AWS EC2 instances via Session Manager">
+    <meta name="twitter:card" content="summary">
+    <meta name="twitter:title" content="SSM Remote Session Gateway">
+    <meta name="twitter:description" content="Manage AWS EC2 instances via Session Manager">
 
     <title>SSM Remote Session Gateway</title>
 
-    <!-- Preload critical resources -->
-    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-        as="style">
-    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" as="style">
-    <link rel="preload" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" as="style">
-
-    <!-- Stylesheets -->
+    <!-- Stylesheets (pinned CDN assets carry Subresource Integrity hashes) -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.css" rel="stylesheet"
+        integrity="sha384-Bk5cbLkZQ5raZ0+H2/+VbfYx3WpvxvQK4zqXZr7sYODuaX7bKXoSOnipQxkaS8sv" crossorigin="anonymous">
     <link rel="stylesheet" href="/static/css/style.css">
 
     <!-- Favicon -->
@@ -36,6 +33,14 @@
 </head>
 
 <body>
+    <!-- Update notification banner (hidden by default) -->
+    <div id="updateBanner" class="alert alert-info alert-dismissible fade show d-none rounded-0 mb-0 border-0 border-bottom py-2 px-4 z-banner" role="alert">
+        <i class="bi bi-arrow-up-circle me-2"></i>
+        <strong>Update available:</strong> Version <span id="updateLatestVersion"></span> is available.
+        <a id="updateReleaseLink" href="#" target="_blank" rel="noopener" class="alert-link ms-2">View release notes</a>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+
     <a href="#main-content" class="visually-hidden-focusable">Skip to main content</a>
 
     <div class="container-fluid py-4">
@@ -44,9 +49,9 @@
             <div class="card-body toolbar-body">
                 <div class="d-flex flex-wrap align-items-center gap-2 toolbar-container">
                     <!-- Logo -->
-                    <div class="d-flex align-items-center me-auto" style="min-width: 0;">
+                    <div class="d-flex align-items-center me-auto min-w-0">
                         <img src="/static/images/logo.png" alt="SSM Remote Session Gateway"
-                            style="max-height: 80px; width: auto;" class="me-2">
+                            class="me-2 logo-img">
                         <span class="fw-bold text-primary d-none d-md-inline small">SSM Remote Session Gateway</span>
                     </div>
                     <!-- Profile Selection -->
@@ -161,8 +166,16 @@
                                         </span>
                                     </div>
                                 </div>
-                                <span class="badge bg-primary" id="instanceCount" aria-live="polite"
-                                    aria-atomic="true">0 instances</span>
+                                <div class="d-flex align-items-center gap-2">
+                                    <span class="badge bg-primary" id="instanceCount" aria-live="polite"
+                                        aria-atomic="true">0 instances</span>
+                                    <button id="filterActiveBtn"
+                                            class="badge text-bg-warning border-0 cursor-pointer"
+                                            title="Show only instances with active connections"
+                                            data-act="toggle_active_filter">
+                                        <i class="bi bi-lightning-fill me-1"></i>Active: <span id="activeConnInstanceCount">0</span>
+                                    </button>
+                                </div>
                             </div>
                             <!-- Filter Box -->
                             <div class="filter-box mt-2 d-flex gap-2">
@@ -174,7 +187,7 @@
                                     <span id="filterHelp" class="visually-hidden">Enter a regular expression to filter
                                         instances by name</span>
                                 </div>
-                                <div style="min-width: 150px;">
+                                <div class="min-w-150">
                                     <label for="instanceStateFilter" class="visually-hidden">Filter instances by
                                         state</label>
                                     <select id="instanceStateFilter" class="form-select"
@@ -188,7 +201,7 @@
                                         <option value="terminated">Terminated</option>
                                     </select>
                                 </div>
-                                <div style="min-width: 150px;">
+                                <div class="min-w-150">
                                     <label for="instanceOsFilter" class="visually-hidden">Filter instances by OS</label>
                                     <select id="instanceOsFilter" class="form-select"
                                         aria-label="Filter instances by OS" title="Filter by operating system">
@@ -331,9 +344,21 @@
                     <h5 class="m-0" id="connectionsPanelHeading">Active Connections</h5>
                     <span class="badge bg-success" id="connectionCount" aria-live="polite" aria-atomic="true">0
                         active</span>
+                    <span class="small text-muted ms-1" id="connectionTotal"></span>
+                    <div class="btn-group btn-group-sm ms-2" role="group" aria-label="Connection scope">
+                        <button type="button" class="btn btn-outline-secondary active" id="scopeThisBtn" data-act="set_connection_scope" data-scope="scope">This scope</button>
+                        <button type="button" class="btn btn-outline-secondary" id="scopeAllBtn" data-act="set_connection_scope" data-scope="all">All</button>
+                    </div>
                 </div>
                 <div class="card-body">
-                    <!-- Empty State -->
+                    <div class="d-flex gap-2 mb-2">
+                        <button id="refreshConnectionsBtn" class="btn btn-sm btn-outline-secondary flex-grow-1" data-act="refresh_connections">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                        <button id="disconnectScopeBtn" class="btn btn-sm btn-outline-danger flex-grow-1" data-act="disconnect_scope" title="Disconnect connections for the selected profile and region">
+                            <i class="bi bi-x-circle"></i> Disconnect profile/region
+                        </button>
+                    </div>
                     <div id="connectionsEmptyState" class="text-center text-muted p-4" role="status"
                         aria-live="polite">
                         <i class="bi bi-diagram-2 d-block mb-2" aria-hidden="true"></i>
@@ -403,6 +428,97 @@
                         <span class="spinner-border spinner-border-sm d-none me-2" role="status"
                             aria-hidden="true"></span>
                         Start Forwarding
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Transfer Modal -->
+    <div class="modal fade" id="fileTransferModal" tabindex="-1" aria-labelledby="fileTransferModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="fileTransferModalLabel">
+                        <i class="bi bi-file-earmark-arrow-up me-2"></i>File Transfer (SCP)
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Direction selector -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Direction</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="transferDir" id="dirUpload" value="upload" checked>
+                            <label class="btn btn-outline-primary" for="dirUpload">
+                                <i class="bi bi-upload me-1"></i>Upload (Local → Remote)
+                            </label>
+                            <input type="radio" class="btn-check" name="transferDir" id="dirDownload" value="download">
+                            <label class="btn btn-outline-primary" for="dirDownload">
+                                <i class="bi bi-download me-1"></i>Download (Remote → Local)
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Upload fields -->
+                    <div id="uploadFields">
+                        <div class="mb-3">
+                            <label class="form-label">Local File</label>
+                            <input type="text" class="form-control" id="transferLocalFile" placeholder="/home/user/myfile.txt">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Remote Destination Path</label>
+                            <input type="text" class="form-control" id="transferRemotePath" placeholder="/home/ec2-user/myfile.txt">
+                        </div>
+                    </div>
+
+                    <!-- Download fields -->
+                    <div id="downloadFields" class="d-none">
+                        <div class="mb-3">
+                            <label class="form-label">Remote File Path</label>
+                            <input type="text" class="form-control" id="transferRemoteFile" placeholder="/home/ec2-user/myfile.txt">
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Local Destination Folder</label>
+                            <input type="text" class="form-control" id="transferLocalFolder" placeholder="/home/user/downloads/">
+                        </div>
+                    </div>
+
+                    <!-- Common fields -->
+                    <div class="mb-3">
+                        <label class="form-label">SSH Username</label>
+                        <input type="text" class="form-control" id="transferUsername" placeholder="ec2-user">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">SSH Key Path <small class="text-muted">(optional — leave empty for auto-detection)</small></label>
+                        <input type="text" class="form-control" id="transferKeyPath" placeholder="Leave empty to use key-folder auto-detection">
+                    </div>
+
+                    <!-- scp not available warning -->
+                    <div id="scpWarning" class="alert alert-warning d-none">
+                        <i class="bi bi-exclamation-triangle me-2"></i>
+                        <strong>scp not found.</strong> Install OpenSSH client to use file transfer.
+                    </div>
+
+                    <!-- Progress section -->
+                    <div id="transferProgress" class="d-none mt-3">
+                        <div class="d-flex justify-content-between mb-1">
+                            <span id="transferStatusLabel" class="text-muted small">Connecting…</span>
+                            <span id="transferSpeedEta" class="text-muted small"></span>
+                        </div>
+                        <div class="progress progress-tall">
+                            <div id="transferProgressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+                                 role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">0%</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button id="cancelTransferBtn" class="btn btn-danger d-none" data-act="cancel_transfer">
+                        <i class="bi bi-x-circle me-1"></i>Cancel Transfer
+                    </button>
+                    <button id="startTransferBtn" class="btn btn-primary" data-act="start_transfer">
+                        <i class="bi bi-play-fill me-1"></i>Start Transfer
                     </button>
                 </div>
             </div>
@@ -535,7 +651,7 @@
                     <div class="text-center mb-3">
                         <div class="mb-2">
                             <img src="/static/images/logo.png" alt="SSM Remote Session Gateway Logo"
-                                style="max-width: 120px; height: auto;" class="img-fluid">
+                                class="img-fluid img-max-120">
                         </div>
                         <h5 class="mb-1">SSM Remote Session Gateway</h5>
                         <p class="text-muted mb-2 small" id="appVersion">Version <span id="versionNumber">Loading...</span>
@@ -653,7 +769,7 @@
                                 <div class="col-md-5">
                                     <label for="cacheTtl" class="form-label small">Cache TTL (s)</label>
                                     <input type="number" class="form-control form-control-sm" id="cacheTtl" min="60"
-                                        value="3600">
+                                        value="3600" required>
                                 </div>
                             </div>
                         </div>
@@ -665,6 +781,25 @@
                                 <input type="text" class="form-control form-control-sm" id="sshOptions"
                                     placeholder="-o StrictHostKeyChecking=no ...">
                                 <div class="form-text small mt-1">Options appended to all SSH commands.</div>
+                                <div class="form-check form-switch mt-2">
+                                    <input class="form-check-input" type="checkbox" id="prefStrictHostKey" role="switch">
+                                    <label class="form-check-label small" for="prefStrictHostKey">Strict host key checking</label>
+                                    <div class="form-text small">Verify SSH host keys before connecting or transferring files. Recommended.</div>
+                                </div>
+                                <div class="row g-2 mt-2">
+                                    <div class="col-6">
+                                        <label for="prefProfile" class="form-label small">Preferred profile</label>
+                                        <select id="prefProfile" class="form-select form-select-sm">
+                                            <option value="">Last used</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-6">
+                                        <label for="prefRegion" class="form-label small">Preferred region</label>
+                                        <select id="prefRegion" class="form-select form-select-sm">
+                                            <option value="">Last used</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="mb-4 p-3 bg-light rounded-3 border-start border-4 border-warning">
@@ -688,6 +823,16 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="mb-3 p-3 bg-light rounded-3 border-start border-4 border-secondary">
+                            <h6 class="mb-3 fw-bold"><i class="bi bi-moon-stars me-2"></i>Appearance</h6>
+                            <div class="d-flex align-items-center justify-content-between">
+                                <label class="form-label mb-0 fw-semibold">Dark Mode</label>
+                                <div class="form-check form-switch mb-0">
+                                    <input class="form-check-input" type="checkbox" id="prefDarkMode" role="switch">
+                                    <label class="form-check-label" for="prefDarkMode">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
                         <div class="mb-3 p-3 bg-light rounded-3 border-start border-4 border-info">
                             <h6 class="mb-3 text-info fw-bold"><i class="bi bi-key me-2"></i>SSH Key Discovery</h6>
                             <div id="sshKeyFoldersContainer" class="mb-2">
@@ -703,7 +848,7 @@
                                     <i class="bi bi-folder"></i>
                                 </button>
                             </div>
-                            <input type="file" id="sshKeyFolderFileInput" style="display: none;" webkitdirectory
+                            <input type="file" id="sshKeyFolderFileInput" class="d-none" webkitdirectory
                                 directory multiple>
                             <div class="form-text small">Paths where SSH keys are stored. They will be searched to
                                 decrypt Windows passwords.</div>
@@ -777,8 +922,9 @@
     </div>
 
     <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" defer></script>
-    <script src="/static/js/app.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" defer
+        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+    <script type="module" src="/static/js/app.js"></script>
 </body>
 
 </html>

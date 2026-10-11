@@ -4,6 +4,12 @@ use axum::{
     http::{HeaderValue, Method},
     routing::{get, post},
 };
+use axum::{
+    extract::Request,
+    http::StatusCode,
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
+};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
@@ -11,7 +17,8 @@ use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use rustls::{
     ServerConfig, pki_types::CertificateDer, pki_types::PrivateKeyDer, pki_types::pem::PemObject,
 };
-use static_serve::{embed_asset, embed_assets};
+use static_serve::embed_assets;
+use std::sync::OnceLock;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio_rustls::TlsAcceptor;
@@ -22,6 +29,7 @@ use tower_http::{
 };
 use tracing::{info, warn};
 
+use crate::handlers::transfer;
 use crate::handlers::{aws, connections, prefs};
 use crate::models::Preferences;
 use crate::state::AppState;
@@ -31,6 +39,95 @@ embed_assets!(
     compress = false,
     allow_unknown_extensions = false
 );
+
+/// Per-process API token. Generated at startup and required on every `/api` request.
+static API_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Header carrying the API token.
+const API_TOKEN_HEADER: &str = "x-api-token";
+
+/// Hosts accepted in the Host header (defends against DNS rebinding).
+const ALLOWED_HOSTS: [&str; 2] = ["127.0.0.1:5000", "localhost:5000"];
+
+/// Generates a random 256-bit token encoded as lowercase hex.
+/// Returns:
+///   Ok(token) with 64 hex characters, or an error if the system RNG fails.
+fn generate_api_token() -> anyhow::Result<String> {
+    use aws_lc_rs::rand::{SecureRandom, SystemRandom};
+    let mut bytes = [0u8; 32];
+    SystemRandom::new()
+        .fill(&mut bytes)
+        .map_err(|_| anyhow::anyhow!("failed to generate API token"))?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Compares two byte slices without early exit on the first mismatching byte.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Middleware: rejects `/api` requests that do not carry the correct `X-Api-Token` header.
+/// Args:
+///   req: Incoming request.
+///   next: Remaining middleware and handler chain.
+/// Returns:
+///   The downstream response, or 401 when the token is missing or wrong.
+async fn require_api_token(req: Request, next: Next) -> Response {
+    let expected = API_TOKEN.get().map(String::as_bytes).unwrap_or_default();
+    let provided = req
+        .headers()
+        .get(API_TOKEN_HEADER)
+        .map(|v| v.as_bytes())
+        .unwrap_or_default();
+    if !expected.is_empty() && constant_time_eq(expected, provided) {
+        next.run(req).await
+    } else {
+        (StatusCode::UNAUTHORIZED, "Missing or invalid API token").into_response()
+    }
+}
+
+/// Middleware: rejects requests whose Host (or HTTP/2 authority) is not a loopback address on port 5000.
+/// Args:
+///   req: Incoming request.
+///   next: Remaining middleware and handler chain.
+/// Returns:
+///   The downstream response, or 403 when the host is not allowed.
+async fn check_host_header(req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_owned()));
+    match host {
+        Some(h) if ALLOWED_HOSTS.contains(&h.as_str()) => next.run(req).await,
+        _ => (StatusCode::FORBIDDEN, "Invalid Host header").into_response(),
+    }
+}
+
+/// Content-Security-Policy for the UI. The page has no inline scripts or `style=` attributes.
+/// Allowed origins: jsDelivr (Bootstrap CSS, icons, JS bundle), Google Fonts (font stylesheet
+/// and font files), and api.github.com (plugin version check, via fetch).
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' https://cdn.jsdelivr.net; \
+    style-src 'self' https://cdn.jsdelivr.net https://fonts.googleapis.com; \
+    font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; \
+    img-src 'self' data:; \
+    connect-src 'self' https://api.github.com; \
+    object-src 'none'; \
+    base-uri 'self'; \
+    form-action 'self'; \
+    frame-ancestors 'none'";
+
+/// Serves the SPA shell with the per-process API token injected into the page.
+async fn index_page() -> impl IntoResponse {
+    let token = API_TOKEN.get().map(String::as_str).unwrap_or_default();
+    let page = include_str!("static/templates/index.html").replace("__API_TOKEN__", token);
+    Html(page)
+}
 
 /// Cleans up active connections by killing any child processes and clearing the connections map. This is typically called during server shutdown to ensure that all resources are properly released and there are no lingering processes left running after the server has stopped. It acquires a lock on the connections map, iterates through all managed connections, and attempts to kill any active child processes associated with those connections. After attempting to kill the processes, it clears the connections map to remove all entries. This function is designed to be robust and handle any errors that may occur during process termination without panicking, ensuring a clean shutdown process.
 /// Args:
@@ -45,7 +142,20 @@ async fn cleanup_connections(state: &AppState) {
         }
     }
     lock.clear();
-    tracing::info!("Cleaned up active connections");
+
+    // Stop any in-flight file transfers and their SSM tunnels
+    let mut transfers = state.transfers.lock().await;
+    for t in transfers.values_mut() {
+        t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(child) = t.scp_child.as_mut() {
+            let _ = child.kill().await;
+        }
+        if let Some(child) = t.tunnel_child.as_mut() {
+            let _ = child.kill().await;
+        }
+    }
+    transfers.clear();
+    tracing::info!("Cleaned up active connections and transfers");
 }
 
 /// Runs the Axum server with the specified initial preferences. This function sets up the application state, configures the API routes and middleware layers, and starts listening for incoming connections on a specified address. It also handles graceful shutdown when a Ctrl+C signal is received, ensuring that all active connections are cleaned up properly before the server exits. The server is configured to use TLS with a self-signed certificate for secure communication, and it includes CORS settings to allow requests from localhost origins. If any errors occur during server startup or runtime, they are logged appropriately.
@@ -58,6 +168,8 @@ async fn cleanup_connections(state: &AppState) {
 ///   TLSConfiguration Error: If there is an error generating a self-signed certificate or configuring the TLS settings for the server.
 ///   ServerRuntimeError: If there is an unhandled error during request processing or if there is an issue with the server's runtime environment that causes it to fail during operation.
 pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<()> {
+    let token = generate_api_token()?;
+    let _ = API_TOKEN.set(token);
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
     let state = AppState {
         prefs: Arc::new(tokio::sync::RwLock::new(initial_prefs)),
@@ -68,6 +180,8 @@ pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<
         rds_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         ecs_cache: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         ecs_refreshes: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        transfers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        accounts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         shutdown_tx: shutdown_tx.clone(),
     };
 
@@ -86,7 +200,7 @@ pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<
     // }
 
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([Method::GET, Method::POST, Method::DELETE, Method::OPTIONS])
         .allow_origin([
             "https://127.0.0.1:5000".parse::<HeaderValue>().unwrap(),
             "https://localhost:5000".parse().unwrap(),
@@ -115,6 +229,7 @@ pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<
             post(connections::terminate_all),
         )
         .route("/active-connections", get(connections::active))
+        .route("/disconnect", post(connections::disconnect_scoped))
         .route(
             "/preferences",
             get(prefs::preferences_get).post(prefs::preferences_set),
@@ -131,14 +246,23 @@ pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<
         .route("/rdp-client/connect", post(connections::rdp_client_connect))
         .route("/health", get(aws::health))
         .route("/version", get(aws::version))
-        .route("/quit", post(connections::quit));
-
-    let index_handler = embed_asset!("src/static/templates/index.html", compress = true);
+        .route("/check-update", get(aws::check_update))
+        .route("/check-scp", get(transfer::check_scp))
+        .route(
+            "/transfer/{id}",
+            post(transfer::start_transfer).delete(transfer::cancel_transfer),
+        )
+        .route(
+            "/transfer-progress/{id}",
+            get(transfer::get_transfer_progress),
+        )
+        .route("/quit", post(connections::quit))
+        .layer(middleware::from_fn(require_api_token));
 
     let app = Router::new()
         .nest("/api", api)
         .nest("/static", static_router())
-        .route("/", index_handler)
+        .route("/", get(index_page))
         .layer(CompressionLayer::new())
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(
@@ -168,7 +292,12 @@ pub async fn run(initial_prefs: Preferences, use_https: bool) -> anyhow::Result<
             axum::http::header::STRICT_TRANSPORT_SECURITY,
             HeaderValue::from_static("max-age=31536000; includeSubDomains"),
         ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+        ))
         .layer(cors)
+        .layer(middleware::from_fn(check_host_header))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -291,6 +420,8 @@ fn ensure_self_signed_cert(cert_path: &str, key_path: &str) -> anyhow::Result<()
     let cert_exists = std::fs::metadata(cert_path).is_ok();
     let key_exists = std::fs::metadata(key_path).is_ok();
     if cert_exists && key_exists {
+        // Tighten permissions on keys created by earlier versions.
+        restrict_key_permissions(key_path)?;
         return Ok(());
     }
 
@@ -326,6 +457,73 @@ fn ensure_self_signed_cert(cert_path: &str, key_path: &str) -> anyhow::Result<()
     let cert = params.self_signed(&key_pair)?;
 
     std::fs::write(cert_path, cert.pem())?;
-    std::fs::write(key_path, key_pair.serialize_pem())?;
+    write_private_key(key_path, &key_pair.serialize_pem())?;
     Ok(())
+}
+
+/// Writes the private key file, creating it with owner-only permissions on Unix.
+/// Args:
+///   path: Destination path of the PEM private key.
+///   data: PEM-encoded private key contents.
+/// Returns:
+///   Ok(()) when the file is written with restricted permissions.
+#[cfg(unix)]
+fn write_private_key(path: &str, data: &str) -> std::io::Result<()> {
+    use std::{io::Write, os::unix::fs::OpenOptionsExt};
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(data.as_bytes())?;
+    restrict_key_permissions(path)
+}
+
+/// Writes the private key file. Non-Unix platforms rely on default ACLs.
+#[cfg(not(unix))]
+fn write_private_key(path: &str, data: &str) -> std::io::Result<()> {
+    std::fs::write(path, data)
+}
+
+/// Sets the private key file to owner read/write only (mode 0600) on Unix.
+/// Args:
+///   path: Path of the existing private key file.
+/// Returns:
+///   Ok(()) when permissions are applied or the platform does not support them.
+#[cfg(unix)]
+fn restrict_key_permissions(path: &str) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+}
+
+/// No-op on non-Unix platforms.
+#[cfg(not(unix))]
+fn restrict_key_permissions(_path: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_token_is_64_lowercase_hex_chars_and_unique() {
+        let a = generate_api_token().expect("rng");
+        let b = generate_api_token().expect("rng");
+        assert_eq!(a.len(), 64);
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn constant_time_eq_matches_only_identical_bytes() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secret!"));
+        assert!(!constant_time_eq(b"", b"x"));
+    }
 }

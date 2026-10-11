@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::error;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -11,11 +13,26 @@ pub struct Preferences {
     pub logging_format: String,
     pub last_profile: Option<String>,
     pub last_region: Option<String>,
+    /// Profile and region chosen in Settings; applied at startup in preference to the last connection.
+    #[serde(default)]
+    pub preferred_profile: Option<String>,
+    #[serde(default)]
+    pub preferred_region: Option<String>,
     pub ssh_key_folder: Option<String>,
     pub ssh_options: String,
     pub cache_ttl_secs: u64,
     pub linux_username: String,
     pub windows_username: String,
+    #[serde(default)]
+    pub dark_mode: bool,
+    /// When true, SSH/SCP verify host keys strictly (StrictHostKeyChecking=yes).
+    #[serde(default = "default_true")]
+    pub strict_host_key_checking: bool,
+}
+
+/// Serde default helper returning `true`.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Preferences {
@@ -28,11 +45,15 @@ impl Default for Preferences {
             logging_format: "%Y-%m-%dT%H:%M:%S%.3f %l %t".into(),
             last_profile: None,
             last_region: None,
+            preferred_profile: None,
+            preferred_region: None,
             ssh_key_folder: None,
             ssh_options: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null".into(),
             cache_ttl_secs: 3600,
             linux_username: "ec2-user".into(),
             windows_username: "Administrator".into(),
+            dark_mode: false,
+            strict_host_key_checking: true,
         }
     }
 }
@@ -108,6 +129,13 @@ impl Preferences {
     }
 }
 
+/// AWS account identity for a profile, recorded when the profile connects.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AccountInfo {
+    pub account_id: String,
+    pub account_alias: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConnectionInfo {
     pub id: uuid::Uuid,
@@ -163,6 +191,14 @@ pub struct CachedEcsTasks {
 pub struct CachedInstances {
     pub fetched_at: i64,
     pub entries: Vec<InstanceItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateInfo {
+    pub has_update: bool,
+    pub current_version: String,
+    pub latest_version: String,
+    pub release_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -232,6 +268,57 @@ pub struct RdpClientReq {
     pub password: Option<String>,
 }
 
+/// Direction of the file transfer
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TransferDirection {
+    Upload,
+    Download,
+}
+
+/// Body sent by the frontend to POST /api/transfer/{instance_id}
+#[derive(Debug, Deserialize)]
+pub struct TransferRequest {
+    pub direction: TransferDirection,
+    pub local_path: String,
+    pub remote_path: String,
+    pub username: Option<String>,
+    pub key_path: Option<String>,
+}
+
+/// Status enum for an ongoing or finished transfer
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Connecting,
+    Transferring,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+/// Progress snapshot returned by GET /api/transfer-progress/{transfer_id}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferProgress {
+    pub id: String,
+    pub status: TransferStatus,
+    pub percent: u8,
+    pub speed: String,
+    pub eta: String,
+    pub error: Option<String>,
+}
+
+/// Internal state for a running transfer
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct ManagedTransfer {
+    pub id: uuid::Uuid,
+    pub progress: Arc<Mutex<TransferProgress>>,
+    pub scp_child: Option<tokio::process::Child>,
+    pub tunnel_child: Option<tokio::process::Child>,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct WindowsPasswordReq {
     pub pem_key: Option<String>,
@@ -243,11 +330,14 @@ pub struct PrefsInput {
     pub port_range: Option<PortRange>,
     pub logging: Option<Logging>,
     pub aws: Option<AwsPref>,
+    pub preferred_aws: Option<AwsPref>,
     pub ssh_key_folder: Option<String>,
     pub ssh_options: Option<String>,
     pub cache_ttl_secs: Option<u64>,
     pub linux_username: Option<String>,
     pub windows_username: Option<String>,
+    pub dark_mode: Option<bool>,
+    pub strict_host_key_checking: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -266,4 +356,24 @@ pub struct Logging {
 pub struct AwsPref {
     pub profile: Option<String>,
     pub region: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_host_key_defaults_to_true_for_old_preference_files() {
+        // Files written before the setting existed must load with strict checking on.
+        let prefs: Preferences = serde_json::from_str("{}").expect("empty prefs parse");
+        assert!(prefs.strict_host_key_checking);
+        assert_eq!(prefs.linux_username, "ec2-user");
+    }
+
+    #[test]
+    fn explicit_host_key_setting_is_respected() {
+        let prefs: Preferences =
+            serde_json::from_str(r#"{"strict_host_key_checking": false}"#).expect("parse");
+        assert!(!prefs.strict_host_key_checking);
+    }
 }

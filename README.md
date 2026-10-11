@@ -68,12 +68,39 @@ SSM Remote Session Gateway simplifies access to EC2 instances and RDS databases 
 - **🎨 Modern UI**  
   Clean, responsive interface built with Bootstrap 5
 
+- **📁 SCP File Transfer**  
+  Upload and download files to/from EC2 instances through SSM tunnels without exposing SSH ports
+
+- **🌓 Dark Mode**  
+  Optional dark theme for comfortable viewing in low-light environments
+
+- **⬆️ Auto-Update Check**  
+  Automatic notification when a newer version is available on GitHub
+
+- **🎯 Active Connections Filter**  
+  Quick filter badge to show only instances with active connections
+
+- **📅 Instance Creation Tracking**  
+  Display instance creation date (immutable) vs. last launch time
+
+- **🎯 Scoped Connections**  
+  Show connections for the current profile/region or for all, and disconnect by scope
+
+- **🏷️ Account Per Connection**  
+  Each connection shows its account alias (or ID) and profile
+
+- **⭐ Preferred Profile and Region**  
+  Choose a default profile and region in Preferences
+
+- **🔒 Strict Host Key Checking**  
+  SSH host key verification is enabled by default and can be toggled in Preferences
+
 ---
 
 ## 📋 Prerequisites
 
 ### System Requirements
-- **Rust Toolchain** (1.93+ recommended)
+- **Rust Toolchain** (1.99.0+, matching `rust-version` in `Cargo.toml`)
 - **[Session Manager Plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)** (Required for SSM sessions)
 - **AWS Credentials Profiles** (Configured in `~/.aws/credentials` and `~/.aws/config`)
 
@@ -83,7 +110,17 @@ SSM Remote Session Gateway simplifies access to EC2 instances and RDS databases 
 
 ---
 
-## 🛡️ IAM Permissions
+## � Security
+
+- **API token**: each process generates a random 256-bit token. Every `/api/*` request must send it in the `X-Api-Token` header. The UI receives it through a meta tag injected by the server.
+- **Host allowlist**: requests are accepted only for `127.0.0.1:5000` and `localhost:5000`.
+- **Content Security Policy**: no `unsafe-inline` or `unsafe-eval`. CDN assets are loaded with Subresource Integrity (SRI).
+- **No shell**: SSH commands are built as argument lists. Usernames and remote/local paths are validated before SCP transfers.
+- **Key files**: generated private keys are written with mode `0600`.
+
+---
+
+## �🛡️ IAM Permissions
 
 The user/role running this gateway needs the following permissions:
 
@@ -95,7 +132,67 @@ The user/role running this gateway needs the following permissions:
 
 ---
 
-## 🛠️ Build
+## 🛠️ Installation
+
+### Option 1: Use Prebuilt Binary (Recommended)
+
+Download the latest prebuilt binary from [GitHub Releases](https://github.com/bartleboeuf/ssm-remote-session-gateway/releases):
+
+**Linux (x86_64):**
+```bash
+# Download and extract the latest binary
+wget https://github.com/bartleboeuf/ssm-remote-session-gateway/releases/latest/download/ssm-remote-session-gateway-linux-x86_64.tar.gz
+tar -xzf ssm-remote-session-gateway-linux-x86_64.tar.gz
+chmod +x ssm-remote-session-gateway
+
+# Run it
+./ssm-remote-session-gateway
+```
+
+**Linux (ARM64):**
+```bash
+# Download and extract the latest ARM64 binary
+wget https://github.com/bartleboeuf/ssm-remote-session-gateway/releases/latest/download/ssm-remote-session-gateway-linux-aarch64.tar.gz
+tar -xzf ssm-remote-session-gateway-linux-aarch64.tar.gz
+chmod +x ssm-remote-session-gateway
+
+# Run it
+./ssm-remote-session-gateway
+```
+
+**macOS (Intel):**
+```bash
+# Download and extract the latest binary
+wget https://github.com/bartleboeuf/ssm-remote-session-gateway/releases/latest/download/ssm-remote-session-gateway-macos-x86_64.tar.gz
+tar -xzf ssm-remote-session-gateway-macos-x86_64.tar.gz
+chmod +x ssm-remote-session-gateway
+
+# Run it
+./ssm-remote-session-gateway
+```
+
+**macOS (Apple Silicon):**
+```bash
+# Download and extract the latest ARM64 binary
+wget https://github.com/bartleboeuf/ssm-remote-session-gateway/releases/latest/download/ssm-remote-session-gateway-macos-aarch64.tar.gz
+tar -xzf ssm-remote-session-gateway-macos-aarch64.tar.gz
+chmod +x ssm-remote-session-gateway
+
+# Run it
+./ssm-remote-session-gateway
+```
+
+**Windows (PowerShell):**
+```powershell
+# Download and extract the latest binary
+Invoke-WebRequest -Uri "https://github.com/bartleboeuf/ssm-remote-session-gateway/releases/latest/download/ssm-remote-session-gateway-windows-x86_64.zip" -OutFile "ssm-remote-session-gateway.zip"
+Expand-Archive -Path "ssm-remote-session-gateway.zip" -DestinationPath "."
+
+# Run it
+.\ssm-remote-session-gateway.exe
+```
+
+### Option 2: Build from Source
 
 Clone the repository and build locally with Cargo:
 
@@ -105,7 +202,7 @@ cd ssm-remote-session-gateway
 cargo build --release
 ```
 
-You can also download a pre-built binary from the project GitHub releases page instead of building locally.
+The compiled binary will be at `target/release/ssm-remote-session-gateway`.
 
 ## ▶️ Run
 
@@ -184,17 +281,20 @@ ssm-remote-session-gateway/
 ├── src/
 │   ├── main.rs            # Axum server entrypoint
 │   ├── server.rs          # HTTP server, routing, and graceful shutdown
-│   ├── handlers/          # API endpoint logic (AWS, connections, prefs)
+│   ├── handlers/          # API endpoint logic (connections, prefs, transfer)
+│   │   └── aws/           # AWS: common, profiles, ec2, rds, ecs, health
 │   ├── models.rs          # Data structures and persistent preferences
 │   ├── state.rs           # Shared application state
 │   ├── logging.rs         # Structured file + environment logging
 │   └── static/            # Static web assets
 │       ├── css/           # CSS stylesheets (Bootstrap + custom)
-│       ├── js/            # SPA core logic (app.js)
+│       ├── js/            # ES modules: app.js entry + modules/*.js
 │       ├── images/        # UI icons and assets
 │       └── templates/     # HTML shell (index.html)
 ├── Cargo.toml             # Rust package configuration
 ├── Cargo.lock             # Dependency lockfile
+├── scripts/
+│   └── restart-dev.sh     # Rebuild, replace the port 5000 owner, verify served build
 ├── README.md              # Project documentation
 ├── LICENSE                # MIT license
 └── image/                 # Repository screenshots
@@ -205,7 +305,9 @@ ssm-remote-session-gateway/
 ## 🔧 Development
 
 - Format: `cargo fmt`
-- Lint/check: `cargo check`
+- Lint/check: `cargo check`, `cargo clippy --all-targets`
+- Test: `cargo test`
+- Restart dev server after frontend changes: `scripts/restart-dev.sh` (assets are embedded at compile time)
 - Build: `cargo build --release`
 
 ---
@@ -225,17 +327,19 @@ Binary: `target/release/ssm-remote-session-gateway`.
 1. **Connect to AWS**
    - Select your AWS profile from the dropdown
    - Choose the AWS region
-   - Click "Connect"
+   - Changing the profile or region reloads the resource lists automatically
    - View your EC2 instances and RDS databases in the lists
 
 2. **Start a Connection**
    - **SSH**: Click the "SSH" button on an EC2 instance card. The gateway starts an SSM port-forward tunnel and launches your local `ssh` client with the resolved key and local port.
    - **RDP**: Click the "RDP" button on Windows EC2 instances
+   - **File Transfer**: Click the "📁" button to upload or download files via SCP (requires `scp` binary in PATH)
    - **Custom Port**: Click the "Port" button and specify remote/local ports
    - **RDS Database**: Click the "Connect" button on a database and select an EC2 instance to route through as a relay host. RDS is accessed via the selected EC2 instance because the database itself does not support direct SSM port forwarding.
 
 3. **Manage Connections**
-   - View active connections in the sidebar
+   - View active connections in the sidebar, filtered to the current profile/region or all
+   - Disconnect the current profile/region, or all connections
    - Copy connection details to clipboard
    - Terminate connections when done
 
@@ -251,11 +355,23 @@ Use the filter box to search instances by:
 
 Supports **regular expressions** for advanced filtering.
 
+Click the **"Active" badge** to filter and show only instances with active connections.
+
+#### File Transfer
+- Upload files to EC2 instances via `scp` through SSM tunnels
+- Download files from EC2 instances to your local machine
+- Real-time progress tracking with speed and ETA estimates
+- Requires `scp` binary (OpenSSH client) installed locally
+
 #### Port Selection
 - **SSH/RDP**: Automatically uses the same local port as remote port (22 for SSH, 3389 for RDP)
 - **RDS**: Automatically detects the database port (3306 for MySQL/Aurora, 5432 for PostgreSQL, etc.)
 - **Custom Ports**: Uses the same local port if available, otherwise falls back to configured range
 - **Port Range**: Configurable in Preferences with a default of 61000-61100.
+
+#### Theme & Updates
+- **Dark Mode**: Toggle dark theme in Preferences for comfortable low-light viewing
+- **Auto-Update**: Check notifies you when a newer version is available on GitHub
 
 ---
 
@@ -275,6 +391,9 @@ Preferences are stored in:
 | **SSH Key Folders** | Directories where SSH keys are stored (one per line) | `~/.ssh` |
 | **Logging Level** | Application log level | INFO |
 | **Cache TTL (secs)** | Duration to reuse cached instance lists per profile/region | 3600 |
+| **Dark Mode** | Enable dark theme for the UI | Disabled |
+| **Preferred Profile / Region** | Profile and region selected on startup | None |
+| **Strict Host Key Checking** | Verify SSH host keys before connecting | Enabled |
 
 #### SSH Key Configuration
 
@@ -321,14 +440,10 @@ session-manager-plugin
 <details>
 <summary><b>No AWS credentials detected</b></summary>
 
-**Solution:** Configure AWS credentials via `aws configure` or environment variables.
+**Solution:** Configure a new AWS profile via `aws configure`.
 
 ```bash
 aws configure
-# or set environment variables:
-export AWS_ACCESS_KEY_ID=your_access_key
-export AWS_SECRET_ACCESS_KEY=your_secret_key
-export AWS_DEFAULT_REGION=us-east-1
 ```
 </details>
 
@@ -373,7 +488,6 @@ MIT License. See `LICENSE` for details.
 
 ## 🎯 Roadmap
 
-- [ ] Dark mode support
 - [ ] CloudShell support
 - [ ] ECS task discovery and SSM-backed host connect
 

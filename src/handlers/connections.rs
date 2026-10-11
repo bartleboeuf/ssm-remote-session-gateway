@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -14,10 +14,8 @@ use std::time::Duration;
 
 use crate::models::{ConnectionInfo, ManagedConnection, RdpClientReq, StartPortReq, err, ok};
 use crate::state::AppState;
-use aws_config::meta::region::RegionProviderChain;
 use aws_sdk_ec2 as ec2;
 use aws_sdk_ssm as ssm;
-use aws_types::region::Region;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 use tokio::time;
@@ -31,7 +29,7 @@ use which::which;
 /// Returns:
 ///   Some(port) if a free port is found, or None if no free ports are available in the specified range.
 /// Note: This function iterates through the specified port range and attempts to bind a TcpListener to each port. If the bind operation is successful, it means the port is
-fn find_free_port(start: u16, end: u16) -> Option<u16> {
+pub fn find_free_port(start: u16, end: u16) -> Option<u16> {
     (start..=end).find(|p| TcpListener::bind(("127.0.0.1", *p)).is_ok())
 }
 
@@ -64,7 +62,7 @@ async fn validate_ssm_document(
 /// The flow mirrors what the AWS CLI does internally:
 /// 1. Call SSM StartSession API to obtain a session token and WebSocket stream URL
 /// 2. Invoke `session-manager-plugin` with the session response JSON, region, and parameters
-async fn start_ssm_port_forward(
+pub async fn start_ssm_port_forward(
     info: &ConnectionInfo,
     prefs: &crate::models::Preferences,
 ) -> Result<tokio::process::Child, (StatusCode, Json<crate::models::ErrorResponse>)> {
@@ -89,15 +87,8 @@ async fn start_ssm_port_forward(
         info.remote_host,
     );
 
-    // --- Step 1: Build AWS config and SSM client ---
-    let region_provider =
-        RegionProviderChain::first_try(Some(Region::new(region.clone()))).or_default_provider();
-
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .region(region_provider)
-        .load()
-        .await;
+    // --- Step 1: Build AWS config (cached per profile/region) and SSM client ---
+    let cfg = crate::handlers::aws::sdk_config(&profile, Some(region.as_str())).await;
 
     let ssm_client = ssm::Client::new(&cfg);
 
@@ -252,16 +243,6 @@ async fn start_ssm_port_forward(
         ));
     }
 
-    // Spawn a timeout task that logs if the process hangs for 5 minutes.
-    // Connection cleanup happens when child process exits or is dropped.
-    tokio::spawn(async move {
-        time::sleep(Duration::from_secs(300)).await;
-        tracing::warn!(
-            "SSM port-forward idle for 5 minutes: session_id={}",
-            session_id
-        );
-    });
-
     Ok(child)
 }
 
@@ -347,33 +328,102 @@ fn build_connection_info(args: ConnectionInfoArgs) -> serde_json::Value {
     }
 }
 
+/// Structured request to open an interactive SSH session through a local tunnel.
 #[derive(Debug, Deserialize)]
 pub struct ExecuteSshRequest {
-    pub command: String,
+    /// Local tunnel host; only loopback addresses are accepted.
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub key_path: Option<String>,
     pub connection_id: Option<uuid::Uuid>,
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn escape_single_quotes_for_bash(input: &str) -> String {
-    input.replace("'", "'\\''")
+/// Builds the full `ssh` argv from validated structured fields. No shell is involved.
+/// Args:
+///   req: Structured SSH launch request.
+///   strict_host_key: Whether host key checking is strict (from preferences).
+/// Returns:
+///   argv beginning with "ssh", or a 400 error when a field is invalid.
+fn ssh_args(
+    req: &ExecuteSshRequest,
+    strict_host_key: bool,
+) -> Result<Vec<String>, (StatusCode, Json<crate::models::ErrorResponse>)> {
+    if !matches!(req.host.as_str(), "127.0.0.1" | "localhost") {
+        return Err(err(
+            StatusCode::BAD_REQUEST,
+            "SSH host must be 127.0.0.1 or localhost",
+        ));
+    }
+    if req.port == 0 {
+        return Err(err(StatusCode::BAD_REQUEST, "Invalid SSH port"));
+    }
+    crate::handlers::transfer::validate_username(&req.user)
+        .map_err(|msg| err(StatusCode::BAD_REQUEST, msg))?;
+
+    let mut args = vec![
+        "ssh".to_string(),
+        "-p".to_string(),
+        req.port.to_string(),
+        "-o".to_string(),
+        format!(
+            "StrictHostKeyChecking={}",
+            if strict_host_key { "yes" } else { "no" }
+        ),
+    ];
+    if !strict_host_key {
+        args.push("-o".into());
+        args.push("UserKnownHostsFile=/dev/null".into());
+    }
+    if let Some(key) = &req.key_path {
+        if key.starts_with('-') || !std::path::Path::new(key).is_file() {
+            return Err(err(StatusCode::BAD_REQUEST, "SSH key file not found"));
+        }
+        args.push("-i".into());
+        args.push(key.clone());
+    }
+    args.push("-l".into());
+    args.push(req.user.clone());
+    args.push(req.host.clone());
+    Ok(args)
+}
+
+/// Quotes one argument for POSIX sh by wrapping it in single quotes.
+fn shell_quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', "'\\''"))
+}
+
+/// Joins argv into a POSIX shell command with every argument quoted.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+fn shell_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| shell_quote(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Joins argv into a PowerShell expression with every argument single-quoted.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn ps_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| format!("'{}'", a.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn launch_ssh_in_terminal(
-    command: &str,
+    argv: &[String],
 ) -> Result<(), (StatusCode, Json<crate::models::ErrorResponse>)> {
-    if command.trim().is_empty() {
-        return Err(err(StatusCode::BAD_REQUEST, "SSH command is empty"));
-    }
-    if !command.trim_start().starts_with("ssh") {
+    if argv.first().map(String::as_str) != Some("ssh") {
         return Err(err(
             StatusCode::BAD_REQUEST,
-            "Only SSH commands may be executed from the web UI",
+            "Only SSH commands may be launched",
         ));
     }
 
     #[cfg(target_os = "macos")]
     {
-        let escaped = command.replace('"', "\\\"");
+        let escaped = shell_join(argv).replace('\\', "\\\\").replace('"', "\\\"");
         let apple_script = format!("tell application \"Terminal\" to do script \"{}\"", escaped);
         Command::new("osascript")
             .arg("-e")
@@ -390,7 +440,7 @@ fn launch_ssh_in_terminal(
 
     #[cfg(target_os = "windows")]
     {
-        let pwsh_command = format!("& {{ {} }}", command.replace('"', "\\\""));
+        let pwsh_command = format!("& {}", ps_join(argv));
         let mut launcher = if which("wt.exe").is_ok() {
             let mut cmd = Command::new("wt.exe");
             cmd.args([
@@ -425,7 +475,7 @@ fn launch_ssh_in_terminal(
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let bash_command = format!("{}; exec bash", escape_single_quotes_for_bash(command));
+        let bash_command = format!("{}; exec bash", shell_join(argv));
         let terminals = [
             (
                 "x-terminal-emulator",
@@ -469,12 +519,15 @@ fn launch_ssh_in_terminal(
 }
 
 pub async fn execute_ssh_command(
+    State(state): State<AppState>,
     Json(req): Json<ExecuteSshRequest>,
 ) -> Result<
     Json<crate::models::ApiResponse<serde_json::Value>>,
     (StatusCode, Json<crate::models::ErrorResponse>),
 > {
-    launch_ssh_in_terminal(&req.command)?;
+    let strict = state.prefs.read().await.strict_host_key_checking;
+    let argv = ssh_args(&req, strict)?;
+    launch_ssh_in_terminal(&argv)?;
     Ok(ok(serde_json::json!({
         "message": "SSH command launched in local terminal",
         "connection_id": req.connection_id,
@@ -482,7 +535,7 @@ pub async fn execute_ssh_command(
 }
 
 /// Retrieves the key pair name attached to the given EC2 instance via DescribeInstances.
-async fn lookup_instance_key_name(
+pub async fn lookup_instance_key_name(
     prefs: &crate::models::Preferences,
     instance_id: &str,
 ) -> Option<String> {
@@ -490,18 +543,7 @@ async fn lookup_instance_key_name(
         .last_profile
         .clone()
         .unwrap_or_else(|| "default".into());
-    let region_provider = prefs
-        .last_region
-        .clone()
-        .map(Region::new)
-        .map(RegionProviderChain::first_try)
-        .unwrap_or_else(RegionProviderChain::default_provider);
-
-    let cfg = aws_config::from_env()
-        .profile_name(&profile)
-        .region(region_provider)
-        .load()
-        .await;
+    let cfg = crate::handlers::aws::sdk_config(&profile, prefs.last_region.as_deref()).await;
 
     let client = ec2::Client::new(&cfg);
     match client
@@ -523,7 +565,7 @@ async fn lookup_instance_key_name(
 }
 
 /// Searches configured folders (including ~/.ssh) for a PEM/key file matching the key name.
-fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
+pub fn find_key_path(key_name: &str, folders: Option<&str>) -> Option<String> {
     let mut dirs = Vec::new();
     if let Some(f) = folders {
         for part in f.split([',', '\n']) {
@@ -733,14 +775,95 @@ pub async fn terminate_all(State(state): State<AppState>) -> impl IntoResponse {
     ok(serde_json::json!({"message": "All connections terminated"}))
 }
 
-/// Returns the list of currently active connections.
-pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
+/// Optional scope for disconnecting: only connections whose profile and/or region match.
+#[derive(Debug, Deserialize, Default)]
+pub struct DisconnectScope {
+    pub profile: Option<String>,
+    pub region: Option<String>,
+}
+
+/// Disconnects connections matching the scope. With no scope, behaves like `terminate_all`.
+/// Args:
+///   scope: Optional profile and region filters taken from the JSON body.
+/// Returns:
+///   The number of connections that were disconnected.
+pub async fn disconnect_scoped(
+    State(state): State<AppState>,
+    body: Option<Json<DisconnectScope>>,
+) -> impl IntoResponse {
+    let scope = body.map(|Json(s)| s).unwrap_or_default();
+    let mut lock = state.connections.lock().await;
+    let matching: Vec<uuid::Uuid> = lock
+        .iter()
+        .filter(|(_, mc)| {
+            scope
+                .profile
+                .as_deref()
+                .is_none_or(|p| mc.info.profile == p)
+                && scope.region.as_deref().is_none_or(|r| mc.info.region == r)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in &matching {
+        if let Some(mut mc) = lock.remove(id)
+            && let Some(mut child) = mc.child.take()
+        {
+            let _ = child.kill().await;
+        }
+    }
+    tracing::info!(
+        "Disconnected {} connection(s) for scope {:?}",
+        matching.len(),
+        scope
+    );
+    ok(serde_json::json!({ "disconnected": matching.len() }))
+}
+
+/// Optional scope for listing: only connections on this profile and/or region. Absent means all.
+#[derive(Debug, Deserialize, Default)]
+pub struct ActiveScope {
+    pub profile: Option<String>,
+    pub region: Option<String>,
+}
+
+/// Returns true when a connection belongs to the requested scope. A missing filter matches any value.
+/// Args:
+///   scope: Optional profile and region filters.
+///   profile: Profile recorded on the connection.
+///   region: Region recorded on the connection.
+/// Returns:
+///   True if the connection is in scope.
+pub fn in_scope(scope: &ActiveScope, profile: &str, region: &str) -> bool {
+    scope.profile.as_deref().is_none_or(|p| p == profile)
+        && scope.region.as_deref().is_none_or(|r| r == region)
+}
+
+/// Returns the account recorded for a profile, if that profile has connected in this process.
+/// Args:
+///   accounts: Map from profile name to account identity.
+///   profile: Profile name of a connection.
+/// Returns:
+///   The account for the profile, or None when it has not connected yet.
+pub fn account_for<'a>(
+    accounts: &'a std::collections::HashMap<String, crate::models::AccountInfo>,
+    profile: &str,
+) -> Option<&'a crate::models::AccountInfo> {
+    accounts.get(profile)
+}
+
+/// Returns the list of currently active connections, optionally limited to a profile and/or region.
+pub async fn active(
+    State(state): State<AppState>,
+    Query(scope): Query<ActiveScope>,
+) -> impl IntoResponse {
     let prefs = state.prefs.read().await.clone();
+    let accounts = state.accounts.lock().await.clone();
     let vals: Vec<_> = state
         .connections
         .lock()
         .await
         .values()
+        .filter(|mc| in_scope(&scope, &mc.info.profile, &mc.info.region))
         .map(|mc| {
             let connection_info = build_connection_info(ConnectionInfoArgs {
                 instance_id: &mc.info.instance_id,
@@ -758,6 +881,8 @@ pub async fn active(State(state): State<AppState>) -> impl IntoResponse {
                 "id": mc.info.id,
                 "profile": mc.info.profile,
                 "region": mc.info.region,
+                "account_id": account_for(&accounts, &mc.info.profile).map(|a| a.account_id.clone()),
+                "account_alias": account_for(&accounts, &mc.info.profile).and_then(|a| a.account_alias.clone()),
                 "instance_id": mc.info.instance_id,
                 "local_port": mc.info.local_port,
                 "remote_port": mc.info.remote_port,
@@ -1085,4 +1210,126 @@ fn launch_rdp_windows_from_wsl(
         "RDP client (mstsc via WSL) launched connecting to {}:{}",
         req.ip, req.port
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(host: &str, port: u16, user: &str, key: Option<&str>) -> ExecuteSshRequest {
+        ExecuteSshRequest {
+            host: host.into(),
+            port,
+            user: user.into(),
+            key_path: key.map(str::to_owned),
+            connection_id: None,
+        }
+    }
+
+    #[test]
+    fn ssh_args_strict_mode_builds_argv_without_shell() {
+        let argv = ssh_args(&req("127.0.0.1", 61000, "ec2-user", None), true)
+            .unwrap_or_else(|_| panic!("valid request"));
+        assert_eq!(argv[0], "ssh");
+        assert!(argv.contains(&"StrictHostKeyChecking=yes".to_string()));
+        assert!(!argv.iter().any(|a| a.contains("UserKnownHostsFile")));
+        assert_eq!(&argv[argv.len() - 3..], ["-l", "ec2-user", "127.0.0.1"]);
+    }
+
+    #[test]
+    fn ssh_args_relaxed_mode_disables_host_key_file() {
+        let argv = ssh_args(&req("localhost", 61000, "ubuntu", None), false)
+            .unwrap_or_else(|_| panic!("valid request"));
+        assert!(argv.contains(&"StrictHostKeyChecking=no".to_string()));
+        assert!(argv.contains(&"UserKnownHostsFile=/dev/null".to_string()));
+    }
+
+    #[test]
+    fn ssh_args_rejects_non_loopback_host() {
+        assert!(ssh_args(&req("10.0.0.5", 61000, "ec2-user", None), true).is_err());
+        assert!(ssh_args(&req("example.com", 61000, "ec2-user", None), true).is_err());
+    }
+
+    #[test]
+    fn ssh_args_rejects_zero_port_and_bad_user() {
+        assert!(ssh_args(&req("127.0.0.1", 0, "ec2-user", None), true).is_err());
+        assert!(ssh_args(&req("127.0.0.1", 61000, "-oProxyCommand=x", None), true).is_err());
+        assert!(ssh_args(&req("127.0.0.1", 61000, "u;id", None), true).is_err());
+    }
+
+    #[test]
+    fn ssh_args_rejects_missing_or_option_like_key() {
+        assert!(
+            ssh_args(
+                &req("127.0.0.1", 61000, "ec2-user", Some("/no/such/key.pem")),
+                true
+            )
+            .is_err()
+        );
+        assert!(ssh_args(&req("127.0.0.1", 61000, "ec2-user", Some("-oX=1")), true).is_err());
+    }
+
+    #[test]
+    fn scope_filter_matches_profile_and_region() {
+        let none = ActiveScope::default();
+        assert!(in_scope(&none, "dev", "eu-west-3"));
+
+        let by_profile = ActiveScope {
+            profile: Some("dev".into()),
+            region: None,
+        };
+        assert!(in_scope(&by_profile, "dev", "eu-west-3"));
+        assert!(!in_scope(&by_profile, "prod", "eu-west-3"));
+
+        let by_region = ActiveScope {
+            profile: None,
+            region: Some("eu-west-3".into()),
+        };
+        assert!(in_scope(&by_region, "prod", "eu-west-3"));
+        assert!(!in_scope(&by_region, "prod", "us-east-1"));
+
+        let both = ActiveScope {
+            profile: Some("dev".into()),
+            region: Some("eu-west-3".into()),
+        };
+        assert!(in_scope(&both, "dev", "eu-west-3"));
+        assert!(!in_scope(&both, "dev", "us-east-1"));
+        assert!(!in_scope(&both, "prod", "eu-west-3"));
+    }
+
+    #[test]
+    fn account_for_returns_recorded_account_or_none() {
+        let mut accounts = std::collections::HashMap::new();
+        accounts.insert(
+            "dev".to_string(),
+            crate::models::AccountInfo {
+                account_id: "123456789012".into(),
+                account_alias: Some("dev-account".into()),
+            },
+        );
+        let found = account_for(&accounts, "dev").expect("dev is recorded");
+        assert_eq!(found.account_id, "123456789012");
+        assert_eq!(found.account_alias.as_deref(), Some("dev-account"));
+        assert!(account_for(&accounts, "prod").is_none());
+    }
+
+    #[test]
+    fn shell_quote_neutralises_metacharacters() {
+        assert_eq!(shell_quote("plain"), "'plain'");
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
+        assert_eq!(shell_quote("$(id)"), "'$(id)'");
+        assert_eq!(shell_quote("x; rm -rf ~"), "'x; rm -rf ~'");
+    }
+
+    #[test]
+    fn shell_join_quotes_every_argument() {
+        let argv = vec!["ssh".to_string(), "-l".to_string(), "x y".to_string()];
+        assert_eq!(shell_join(&argv), "'ssh' '-l' 'x y'");
+    }
+
+    #[test]
+    fn ps_join_doubles_single_quotes() {
+        let argv = vec!["ssh".to_string(), "O'Brien".to_string()];
+        assert_eq!(ps_join(&argv), "'ssh' 'O''Brien'");
+    }
 }

@@ -1204,3 +1204,113 @@ body {
         padding: var(--spacing-md) var(--spacing-md);
     }
 }
+
+/* ============================================
+   DARK MODE OVERRIDES
+   Bootstrap 5.3 handles base theming via data-bs-theme="dark".
+   These target custom-coloured elements only.
+   ============================================ */
+[data-bs-theme="dark"] nav[role="toolbar"] {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%) !important;
+    border-bottom-color: #0f3460 !important;
+}
+
+[data-bs-theme="dark"] .card {
+    background-color: #16213e !important;
+    border-color: #0f3460 !important;
+}
+
+[data-bs-theme="dark"] .instance-card {
+    background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%) !important;
+}
+
+[data-bs-theme="dark"] .instance-card:hover {
+    border-color: var(--color-primary) !important;
+}
+
+[data-bs-theme="dark"] #connectionsPanel {
+    background-color: #1a1a2e !important;
+    border-left-color: #0f3460 !important;
+}
+
+[data-bs-theme="dark"] body {
+    background: linear-gradient(135deg, #0d0d1a 0%, #111827 100%) !important;
+    color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .modal-content {
+    background-color: #16213e !important;
+    border-color: #0f3460 !important;
+}
+
+[data-bs-theme="dark"] .modal-header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #0f3460 100%) !important;
+}
+
+[data-bs-theme="dark"] .bg-light {
+    background-color: #1e2a3a !important;
+}
+
+[data-bs-theme="dark"] .form-control,
+[data-bs-theme="dark"] .form-select {
+    background-color: #1e2a3a !important;
+    border-color: #0f3460 !important;
+    color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .table {
+    color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .table-hover > tbody > tr:hover > * {
+    background-color: rgba(15, 52, 96, 0.4) !important;
+}
+
+[data-bs-theme="dark"] .counter-badge {
+    background-color: #0f3460 !important;
+}
+
+[data-bs-theme="dark"] .info-value {
+    color: #ffffff !important;
+}
+
+[data-bs-theme="dark"] .info-label {
+    color: #9ca3af !important;
+}
+
+[data-bs-theme="dark"] .filter-box .form-control {
+    background-color: #1e2a3a !important;
+    border-color: #0f3460 !important;
+    color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .filter-box .form-select {
+    background-color: #1e2a3a !important;
+    border-color: #0f3460 !important;
+    color: #e5e7eb !important;
+}
+
+[data-bs-theme="dark"] .resource-section .card-header {
+    background-color: #16213e !important;
+}
+
+[data-bs-theme="dark"] .form-label {
+    color: #e5e7eb !important;
+}
+/* Phase 3c: utility classes replacing static inline styles (keeps style-src strict-ready) */
+.badge-purple { background-color: #9d7ce8; color: #fff; }
+.cursor-default { cursor: default; }
+.z-banner { z-index: 1050; }
+.min-w-0 { min-width: 0; }
+.min-w-150 { min-width: 150px; }
+.min-w-220 { min-width: 220px; }
+.logo-img { max-height: 80px; width: auto; }
+.cursor-pointer { cursor: pointer; }
+.break-all-pointer { word-break: break-all; cursor: pointer; }
+.progress-tall { height: 20px; }
+.img-max-120 { max-width: 120px; height: auto; }
+.text-tiny { font-size: 0.7rem; }
+.col-35 { width: 35%; }
+.min-h-15 { min-height: 1.5em; }
+.upgrade-link { color: #fff; text-decoration: underline; }
+.upgrade-close { background: none; border: none; color: #fff; margin-left: 10px; cursor: pointer; font-size: 1rem; }
